@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/mongodb/mongo-go-driver/bson"
 	"github.com/mongodb/mongo-go-driver/mongo"
@@ -54,38 +53,53 @@ func main()  {
 	eventLoop(sigtermCtx, client, s)
 }
 
-func eventLoop(ctx context.Context, client *mongo.Client, s Settings)  {
+func eventLoop(ctx context.Context, client *mongo.Client, s Settings) {
+
+	const MaxProcessing = 10
 
 	collection := client.Database(s.Database).Collection(s.Collection)
 	ticker := time.NewTicker(s.EventLoopSleep)
 
+	numProcessing := 0
+	proc := make(chan struct{err error})
+
 	for {
 		select {
 		case <-ticker.C:
-			go process(ctx, collection, s.DbOpTimeout)
+			if numProcessing < MaxProcessing {
+				numProcessing++
+				go process(ctx, collection, s.DbOpTimeout, proc)
+			}
+		case <-proc:
+			numProcessing--
 		case <-ctx.Done():
-			fmt.Println("Done")
+			log.Println("Done")
 			return
 		}
 	}
 }
 
-func process(ctx context.Context, collection *mongo.Collection, t time.Duration) {
+func process(ctx context.Context, collection *mongo.Collection, t time.Duration, proc chan struct{err error}) {
+
+	var processError error
+	defer func() {proc<-struct{err error}{err:processError}}()
 
 	timeout, cancel := context.WithTimeout(ctx, t)
 	defer cancel()
 
 	cur, err := collection.Find(timeout, nil)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		return
 	}
 	defer cur.Close(timeout)
 
 	for cur.Next(context.Background()) {
 		elem := bson.NewDocument()
 		if err := cur.Decode(elem); err != nil {
-			log.Fatal(err)
+			log.Println(err)
+			return
 		}
-		fmt.Println("Id:", elem.Lookup("_id").ObjectID(), ", srcUrl:", elem.Lookup("srcUrl").StringValue())
+		log.Println("Id:", elem.Lookup("_id").ObjectID(), ", srcUrl:", elem.Lookup("srcUrl").StringValue())
 	}
 }

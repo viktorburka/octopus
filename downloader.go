@@ -5,23 +5,23 @@ import (
 	"log"
 )
 
-type downloader interface {
-	download() error
+type Downloader interface {
+	Download() error
 }
 
-type httpDownloader struct {
+type HttpDownloader struct {
 }
 
-func getDownloaderForScheme(scheme string) (dl downloader, err error) {
+func getDownloaderForScheme(scheme string) (dl Downloader, err error) {
 	switch scheme {
 	case "http":
-		return &httpDownloader{}, nil
+		return &HttpDownloader{}, nil
 	default:
 		return nil, fmt.Errorf("download scheme %v is not supported", scheme)
 	}
 }
 
-func (h *httpDownloader) download() error {
+func (h *HttpDownloader) Download() error {
 	log.Println("http download done")
 	return nil
 }

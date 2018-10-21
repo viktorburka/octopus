@@ -5,23 +5,23 @@ import (
 	"log"
 )
 
-type uploader interface {
-	upload() error
+type Uploader interface {
+	Upload() error
 }
 
-type s3Uploader struct {
+type S3Uploader struct {
 }
 
-func getUploaderForScheme(scheme string) (dl uploader, err error) {
+func getUploaderForScheme(scheme string) (dl Uploader, err error) {
 	switch scheme {
 	case "s3":
-		return &s3Uploader{}, nil
+		return &S3Uploader{}, nil
 	default:
 		return nil, fmt.Errorf("upload scheme %v is not supported", scheme)
 	}
 }
 
-func (s *s3Uploader) upload() error {
+func (s *S3Uploader) Upload() error {
 	log.Println("s3 upload done")
 	return nil
 }

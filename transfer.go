@@ -30,9 +30,9 @@ func transfer(ctx context.Context, srcUrl string, dstUrl string) error {
 		return fmt.Errorf("can't initialize uploader: %v", err)
 	}
 
-	dnl.Download()
-
-	upl.Upload()
+	datachan := make(chan dlData)
+	go dnl.Download(ctx, srcUrl, datachan)
+	go upl.Upload(ctx, dstUrl, datachan)
 
 	return nil
 }

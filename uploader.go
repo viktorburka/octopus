@@ -1,12 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 )
 
 type Uploader interface {
-	Upload() error
+	Upload(ctx context.Context, uri string, data chan dlData)
 }
 
 type S3Uploader struct {
@@ -21,7 +22,6 @@ func getUploaderForScheme(scheme string) (dl Uploader, err error) {
 	}
 }
 
-func (s *S3Uploader) Upload() error {
+func (s *S3Uploader) Upload(ctx context.Context, uri string, data chan dlData) {
 	log.Println("s3 upload done")
-	return nil
 }

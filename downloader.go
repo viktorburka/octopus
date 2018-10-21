@@ -1,12 +1,22 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"fmt"
-	"log"
+	"io"
+	"net/http"
 )
 
+type dlData struct {
+	data []byte
+	size int
+	err error
+	done bool
+}
+
 type Downloader interface {
-	Download() error
+	Download(ctx context.Context, uri string, data chan dlData)
 }
 
 type HttpDownloader struct {
@@ -21,7 +31,35 @@ func getDownloaderForScheme(scheme string) (dl Downloader, err error) {
 	}
 }
 
-func (h *HttpDownloader) Download() error {
-	log.Println("http download done")
-	return nil
+func (h *HttpDownloader) Download(ctx context.Context, uri string, data chan dlData) {
+	// start download
+	client := &http.Client{} //TODO: might also instantiate it once
+	req, err := http.NewRequest("GET", uri, nil)
+	if err != nil {
+		data<-dlData{err: err}
+		return
+	}
+	resp, err := client.Do(req.WithContext(ctx))
+    if err != nil {
+		data<-dlData{err: err}
+        return
+    }
+    defer resp.Body.Close()
+
+	// read data
+	reader := bufio.NewReader(resp.Body)
+	for {
+		//TODO: frequent allocations - improve to reuse the buffer
+		buf := make([]byte, 100*1024*1024) // 100KB
+		br, err := reader.Read(buf)
+		if err == io.EOF { // done reading
+			break
+		} else if err != nil { // otherwise its an error
+			data<-dlData{err:err}
+			return
+		}
+		data <- dlData{data:buf[:br], size:br}
+	}
+
+	data <- dlData{done:true}
 }

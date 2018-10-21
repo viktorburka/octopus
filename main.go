@@ -5,6 +5,8 @@ import (
 	"github.com/kelseyhightower/envconfig"
 	"github.com/mongodb/mongo-go-driver/bson"
 	"github.com/mongodb/mongo-go-driver/mongo"
+	"github.com/mongodb/mongo-go-driver/mongo/findopt"
+	"github.com/mongodb/mongo-go-driver/mongo/mongoopt"
 	"log"
 	"os"
 	"os/signal"
@@ -12,7 +14,7 @@ import (
 	"time"
 )
 
-type Settings struct {
+type settings struct {
 	Database       string `default:"octopus"`
 	Collection     string `default:"jobs"`
 	DbConnection   string `default:"mongodb://localhost:27017"`
@@ -22,7 +24,7 @@ type Settings struct {
 
 func main()  {
 
-	var s Settings
+	var s settings
 
 	err := envconfig.Process("octopus", &s)
 	if err != nil {
@@ -53,25 +55,25 @@ func main()  {
 	eventLoop(sigtermCtx, client, s)
 }
 
-func eventLoop(ctx context.Context, client *mongo.Client, s Settings) {
+func eventLoop(ctx context.Context, client *mongo.Client, s settings) {
 
-	const MaxProcessing = 10
+	const MaxJobs = 10
 
 	collection := client.Database(s.Database).Collection(s.Collection)
 	ticker := time.NewTicker(s.EventLoopSleep)
 
-	numProcessing := 0
-	proc := make(chan struct{err error})
+	jobs := 0
+	proc := make(chan struct{processError error})
 
 	for {
 		select {
 		case <-ticker.C:
-			if numProcessing < MaxProcessing {
-				numProcessing++
-				go process(ctx, collection, s.DbOpTimeout, proc)
+			if jobs < MaxJobs {
+				jobs++
+				go transfer(ctx, collection, s.DbOpTimeout, proc)
 			}
 		case <-proc:
-			numProcessing--
+			jobs--
 		case <-ctx.Done():
 			log.Println("Done")
 			return
@@ -79,27 +81,49 @@ func eventLoop(ctx context.Context, client *mongo.Client, s Settings) {
 	}
 }
 
-func process(ctx context.Context, collection *mongo.Collection, t time.Duration, proc chan struct{err error}) {
+func transfer(ctx context.Context, collection *mongo.Collection, t time.Duration, proc chan struct{processError error}) {
 
-	var processError error
-	defer func() {proc<-struct{err error}{err:processError}}()
+	var transErr error
+	defer func() {proc<-struct{processError error}{processError:transErr}}()
 
 	timeout, cancel := context.WithTimeout(ctx, t)
 	defer cancel()
 
-	cur, err := collection.Find(timeout, nil)
-	if err != nil {
-		log.Println(err)
+	doc := bson.NewDocument()
+
+	log.Println("Querying...")
+	result := collection.FindOneAndUpdate(timeout,
+								map[string]string{"status": "Created"},
+								map[string]map[string]string{"$set": {"status": "Running"}},
+								findopt.BundleUpdateOne().ReturnDocument(mongoopt.After))
+	if err := result.Decode(doc); err != nil {
+		// do not consider ErrNoDocuments as error
+		if err != mongo.ErrNoDocuments {
+			transErr = err
+			log.Println("error:", err)
+		}
 		return
 	}
-	defer cur.Close(timeout)
+	log.Println("Got", doc.Lookup("status").StringValue())
 
-	for cur.Next(context.Background()) {
-		elem := bson.NewDocument()
-		if err := cur.Decode(elem); err != nil {
-			log.Println(err)
-			return
-		}
-		log.Println("Id:", elem.Lookup("_id").ObjectID(), ", srcUrl:", elem.Lookup("srcUrl").StringValue())
+	if doc.Lookup("status").StringValue() == "Running" {
+		// start job
+		log.Println("Start job!")
 	}
+
+	//cur, err := collection.Find(timeout, nil)
+	//if err != nil {
+	//	log.Println(err)
+	//	return
+	//}
+	//defer cur.Close(timeout)
+	//
+	//for cur.Next(context.Background()) {
+	//	elem := bson.NewDocument()
+	//	if err := cur.Decode(elem); err != nil {
+	//		log.Println(err)
+	//		return
+	//	}
+	//	log.Println("Id:", elem.Lookup("_id").ObjectID(), ", srcUrl:", elem.Lookup("srcUrl").StringValue())
+	//}
 }

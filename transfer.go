@@ -30,12 +30,24 @@ func transfer(ctx context.Context, srcUrl string, dstUrl string) error {
 		return fmt.Errorf("can't initialize uploader: %v", err)
 	}
 
-	ioctx, _ := context.WithCancel(ctx)
+	ioctx, cancel := context.WithCancel(ctx)
 
 	datachan := make(chan dlData)
-	go dnl.Download(ioctx, srcUrl, datachan)
-	go upl.Upload(ioctx, dstUrl, datachan)
+	commchan := make(chan dlMessage)
+	go dnl.Download(ioctx, srcUrl, datachan, commchan)
+	go upl.Upload(ioctx, dstUrl, datachan, commchan)
 
-	<-ioctx.Done()
+	// wait until transfer complete
+	for {
+		msg := <-commchan
+		if msg.err != nil {
+			cancel()
+			return msg.err
+		}
+		if msg.sender == "uploader" { // upload part is done
+			break
+		}
+	}
+
 	return nil
 }

@@ -23,6 +23,10 @@ type settings struct {
     DbOpTimeout    time.Duration `default:"5s"`
 }
 
+type jobStatus struct{
+	jobError error
+}
+
 func main()  {
 
     var s settings
@@ -64,7 +68,7 @@ func eventLoop(ctx context.Context, client *mongo.Client, s settings) {
     ticker := time.NewTicker(s.EventLoopSleep)
 
     jobs := 0
-    proc := make(chan struct{processError error})
+    proc := make(chan jobStatus)
 
     for {
         select {
@@ -73,8 +77,11 @@ func eventLoop(ctx context.Context, client *mongo.Client, s settings) {
                 jobs++
                 go startJob(ctx, collection, s.DbOpTimeout, proc)
             }
-        case <-proc:
+        case status := <-proc:
             jobs--
+            if status.jobError != nil {
+            	log.Println("error:", status.jobError)
+			}
         case <-ctx.Done():
             log.Println("Done")
             return
@@ -82,10 +89,10 @@ func eventLoop(ctx context.Context, client *mongo.Client, s settings) {
     }
 }
 
-func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration, proc chan struct{processError error}) {
+func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration, proc chan jobStatus) {
 
     var transErr error
-    defer func() {proc<-struct{processError error}{processError:transErr}}()
+    defer func() {proc<-jobStatus{jobError:transErr}}()
 
     timeout, cancel := context.WithTimeout(ctx, t)
     defer cancel()
@@ -105,7 +112,7 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
         }
         return
     }
-    log.Println("Got", doc.Lookup("status").StringValue())
+    log.Println("Got one document. Parsing...")
 
     var newJob job
 
@@ -114,8 +121,12 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
         return
     }
 
+	log.Println("Starting transfer from", newJob.srcUrl, "to", newJob.dstUrl, "...")
+
     if err := transfer(ctx, newJob.srcUrl, newJob.dstUrl); err != nil {
         transErr = fmt.Errorf("can't perform transfer: %v", err)
         return
     }
+
+    log.Println("Finished transfer")
 }

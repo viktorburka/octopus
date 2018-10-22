@@ -24,7 +24,7 @@ type settings struct {
 }
 
 type jobStatus struct{
-	jobError error
+    jobError error
 }
 
 func main()  {
@@ -80,8 +80,8 @@ func eventLoop(ctx context.Context, client *mongo.Client, s settings) {
         case status := <-proc:
             jobs--
             if status.jobError != nil {
-            	log.Println("error:", status.jobError)
-			}
+                log.Println("error:", status.jobError)
+            }
         case <-ctx.Done():
             log.Println("Done")
             return
@@ -121,7 +121,7 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
         return
     }
 
-	log.Println("Starting transfer from", newJob.srcUrl, "to", newJob.dstUrl, "...")
+    log.Println("Starting transfer from", newJob.srcUrl, "to", newJob.dstUrl, "...")
 
     if err := transfer(ctx, newJob.srcUrl, newJob.dstUrl); err != nil {
         transErr = fmt.Errorf("can't perform transfer: %v", err)

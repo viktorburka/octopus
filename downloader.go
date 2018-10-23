@@ -60,7 +60,7 @@ func (h *HttpDownloader) Download(ctx context.Context, uri string, options map[s
     for {
         //TODO: frequent allocations - improve to reuse the buffer
         log.Println("downloader: reading data...")
-        buf := make([]byte, 100*1024*1024) // 100KB
+        buf := make([]byte, 3*1024*1024) // 3MB
         br, err := reader.Read(buf)
         if err != nil && err != io.EOF { // its an error (io.EOF is fine)
             msg<-dlMessage{sender:"downloader", err: err}

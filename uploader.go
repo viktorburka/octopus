@@ -8,6 +8,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/url"
@@ -44,7 +46,86 @@ func getUploaderForScheme(scheme string) (dl Uploader, err error) {
 func (s *S3Uploader) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
 	// TODO: add file size check here to perform
 	// TODO: multipart or single upload based on AWS guidelines
-	uploadMultiPart(ctx, uri, options, data, msg)
+	upload(ctx, uri, options, data, msg)
+}
+
+type chanReader struct {
+	ctx context.Context
+	data chan dlData
+}
+
+func (c *chanReader) Read(p []byte) (int, error) {
+	select {
+	case chunk, ok := <-c.data:
+		if !ok { // channel closed
+			return 0, io.EOF
+		}
+		if cap(p) < len(chunk.data) {
+			return 0, fmt.Errorf("read buffer size %v is less than data buffer size %v", cap(p), cap(chunk.data))
+		}
+		bc := copy(p, chunk.data)
+		return bc, nil
+	case <-c.ctx.Done(): // there is cancellation
+		return 0, c.ctx.Err()
+	}
+}
+
+func newChanReader(ctx context.Context, data chan dlData) *chanReader {
+	return &chanReader{ctx: ctx, data: data}
+}
+
+func upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
+
+	var bucket  string
+	var keyName string
+
+	uploadUrl, err := url.Parse(uri)
+	if err != nil {
+		msg<-dlMessage{sender:"uploader", err:err}
+		return
+	}
+
+	style, ok := options["bucketNameStyle"]
+	if !ok {
+		// set 'path-style' bucket name by default
+		// see https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
+		style = "path-style"
+	}
+
+	if style == "path-style" {
+		idx := strings.Index(uploadUrl.Path, "/")
+		bucket = uploadUrl.Path[:idx]
+		keyName = uploadUrl.Path[idx+1:]
+	} else {
+		hostname := uploadUrl.Hostname()
+		idx := strings.Index(hostname, ".")
+		bucket = hostname[:idx]
+		keyName = uploadUrl.Path[1:] // skip first '/' char
+	}
+
+	s, err := session.NewSession()
+	if err != nil {
+		printAwsError(err)
+		msg<-dlMessage{sender:"uploader", err:err}
+		return
+	}
+
+	uploader := s3manager.NewUploader(s, func(u *s3manager.Uploader) {
+		u.PartSize = 5*1024*1024 //TODO: this value has to be in sync with downloader buf
+	})
+	result, err := uploader.UploadWithContext(ctx, &s3manager.UploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(keyName),
+		Body:   newChanReader(ctx, data),
+	})
+	if err != nil {
+		printAwsError(err)
+		msg<-dlMessage{sender:"uploader", err:err}
+		return
+	}
+
+	log.Println("Successfully uploaded object to", result.Location)
+	msg<-dlMessage{sender:"uploader", err:nil}
 }
 
 // Performs concurrent multipart upload

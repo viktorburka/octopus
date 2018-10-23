@@ -6,7 +6,7 @@ import (
     "net/url"
 )
 
-func transfer(ctx context.Context, srcUrl string, dstUrl string) error {
+func transfer(ctx context.Context, srcUrl string, dstUrl string, options map[string]string) error {
 
     var src *url.URL
     var dst *url.URL
@@ -34,8 +34,9 @@ func transfer(ctx context.Context, srcUrl string, dstUrl string) error {
 
     datachan := make(chan dlData)
     commchan := make(chan dlMessage)
-    go dnl.Download(ioctx, srcUrl, datachan, commchan)
-    go upl.Upload(ioctx, dstUrl, datachan, commchan)
+
+    go dnl.Download(ioctx, srcUrl, options, datachan, commchan)
+    go upl.Upload(ioctx, dstUrl, options, datachan, commchan)
 
     // wait until transfer complete
     for {

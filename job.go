@@ -98,7 +98,11 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
 
     update := map[string]string{"status": complete}
 
-    if err := transfer(ctx, newJob.srcUrl, newJob.dstUrl); err != nil {
+    // bucket can be 'path-style' or 'virtual-hosted–style'
+    // TODO: setting 'path-style' by default but change to pass this opt
+    opt := map[string]string{"bucketNameStyle": "path-style"}
+
+    if err := transfer(ctx, newJob.srcUrl, newJob.dstUrl, opt); err != nil {
         transErr = fmt.Errorf("can't perform transfer: %v", err)
         //status = failed
         update["status"] = failed

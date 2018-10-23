@@ -21,7 +21,7 @@ type dlMessage struct {
 }
 
 type Downloader interface {
-    Download(ctx context.Context, uri string, data chan dlData, msg chan dlMessage)
+    Download(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage)
 }
 
 type HttpDownloader struct {
@@ -38,7 +38,7 @@ func getDownloaderForScheme(scheme string) (dl Downloader, err error) {
     }
 }
 
-func (h *HttpDownloader) Download(ctx context.Context, uri string, data chan dlData, msg chan dlMessage) {
+func (h *HttpDownloader) Download(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
     // start download
     client := &http.Client{} //TODO: might also instantiate it once
     req, err := http.NewRequest("GET", uri, nil)

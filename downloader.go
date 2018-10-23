@@ -30,7 +30,7 @@ type HttpDownloader struct {
 func getDownloaderForScheme(scheme string) (dl Downloader, err error) {
     switch scheme {
     case "http":
-        fallthrough
+       fallthrough
     case "https":
         return &HttpDownloader{}, nil
     default:

@@ -36,7 +36,7 @@ func (j *job) init(document *bson.Document) error {
     var val *bson.Value
 
     if document == nil {
-        return fmt.Errorf("can't init from nil document")
+        return fmt.Errorf("can't start from nil document")
     }
 
     if val = document.Lookup("_id"); val == nil {
@@ -99,7 +99,7 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
     update := map[string]string{"status": complete}
 
     // bucket can be 'path-style' or 'virtual-hosted–style'
-    // TODO: setting 'path-style' by default but change to pass this opt
+    // TODO: read options from the db
     opt := map[string]string{"bucketNameStyle": "path-style"}
 
     if err := transfer(ctx, newJob.srcUrl, newJob.dstUrl, opt); err != nil {

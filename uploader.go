@@ -52,18 +52,22 @@ func (s *S3Uploader) Upload(ctx context.Context, uri string, options map[string]
 type chanReader struct {
 	ctx context.Context
 	data chan dlData
+	rem []byte
 }
 
 func (c *chanReader) Read(p []byte) (int, error) {
+	if len(c.rem) > 0 {
+		bc := copy(p, c.rem)
+		c.rem = c.rem[bc:]
+		return bc, nil
+	}
 	select {
 	case chunk, ok := <-c.data:
-		if !ok { // channel closed
+		if !ok && chunk.data == nil { // channel closed and no data left
 			return 0, io.EOF
 		}
-		if cap(p) < len(chunk.data) {
-			return 0, fmt.Errorf("read buffer size %v is less than data buffer size %v", cap(p), cap(chunk.data))
-		}
 		bc := copy(p, chunk.data)
+		c.rem = chunk.data[bc:]
 		return bc, nil
 	case <-c.ctx.Done(): // there is cancellation
 		return 0, c.ctx.Err()
@@ -71,7 +75,7 @@ func (c *chanReader) Read(p []byte) (int, error) {
 }
 
 func newChanReader(ctx context.Context, data chan dlData) *chanReader {
-	return &chanReader{ctx: ctx, data: data}
+	return &chanReader{ctx: ctx, data: data, rem: make([]byte,0)}
 }
 
 func upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {

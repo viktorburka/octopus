@@ -1,14 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/url"
@@ -43,38 +41,7 @@ func getUploaderForScheme(scheme string) (dl Uploader, err error) {
 }
 
 func (s *S3Uploader) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
-	// TODO: add file size check here to perform
-	// TODO: multipart or single upload based on AWS guidelines
 	upload(ctx, uri, options, data, msg)
-}
-
-type chanReader struct {
-	ctx context.Context
-	data chan dlData
-	rem []byte
-}
-
-func (c *chanReader) Read(p []byte) (int, error) {
-	if len(c.rem) > 0 {
-		bc := copy(p, c.rem)
-		c.rem = c.rem[bc:]
-		return bc, nil
-	}
-	select {
-	case chunk, ok := <-c.data:
-		if !ok { // channel closed and no data left
-			return 0, io.EOF
-		}
-		bc := copy(p, chunk.data)
-		c.rem = chunk.data[bc:]
-		return bc, nil
-	case <-c.ctx.Done(): // there is cancellation
-		return 0, c.ctx.Err()
-	}
-}
-
-func newChanReader(ctx context.Context, data chan dlData) *chanReader {
-	return &chanReader{ctx: ctx, data: data, rem: make([]byte,0)}
 }
 
 func upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
@@ -109,7 +76,6 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 
 	s, err := session.NewSession()
 	if err != nil {
-		printAwsError(err)
 		msg<-dlMessage{sender:"uploader", err:err}
 		return
 	}
@@ -151,20 +117,6 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 		msg<-dlMessage{sender:"uploader", err:err}
 		return
 	}
-
-	//var makePartFilePath = func(dir string, part int64) string {
-	//	fileName := fmt.Sprintf("%v.part", counter)
-	//	return filepath.Join(dir, fileName)
-	//}
-	//
-	//tempFilePath := makePartFilePath(tempDir, counter)
-	//
-	//file, err := os.Create(tempFilePath)
-	//if err != nil {
-	//	msg<-dlMessage{sender:"uploader", err:err}
-	//	return
-	//}
-	//defer file.Close()
 
 	opErrCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -229,11 +181,7 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 					return
 				}
 			}
-			//if !ok && len(data) == 0 { // channel closed and no data left
-			//	msg<-dlMessage{sender:"uploader", err:nil}
-			//	close(etagschan)
-			//	return
-			//}
+
 			isLastChunk = !ok && len(data) == 0 // channel closed and no data left
 
 			if chunk.size > 0 {
@@ -269,7 +217,6 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 				}
 				file = nil
 				if isMultipart {
-					// upload multi-part
 					uploadPart(opErrCtx, s3client, fpath, bucket, keyName, counter, mpu.UploadId, etagschan, errchan)
 					total = 0
 					counter += 1
@@ -291,15 +238,14 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 	}
 
 	if isMultipart {
-		// complete multi-part
+		err = completeMultipart(opErrCtx, s3client, bucket, keyName, etags, mpu.UploadId)
 	} else {
-		// upload single-part
-		err := uploadWhole(opErrCtx, s3client, fpath, bucket, keyName)
-		if err != nil {
-			cancel()
-			msg<-dlMessage{sender:"uploader", err:err}
-			return
-		}
+		err = uploadWhole(opErrCtx, s3client, fpath, bucket, keyName)
+	}
+	if err != nil {
+		//cancel()
+		msg<-dlMessage{sender:"uploader", err:err}
+		return
 	}
 
 	msg<-dlMessage{sender:"uploader", err:nil}
@@ -334,190 +280,58 @@ func uploadPart(ctx context.Context, s3client *s3.S3, filePath string, bucket st
 		return
 	}
 
+	if err := os.Remove(filePath); err != nil {
+		errchan<-err
+		return
+	}
+
 	etags <- &s3.CompletedPart{ ETag:result.ETag, PartNumber: newInt64(pn) }
 }
 
-//func upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
-//
-//	var bucket  string
-//	var keyName string
-//
-//	uploadUrl, err := url.Parse(uri)
-//	if err != nil {
-//		msg<-dlMessage{sender:"uploader", err:err}
-//		return
-//	}
-//
-//	style, ok := options["bucketNameStyle"]
-//	if !ok {
-//		// set 'path-style' bucket name by default
-//		// see https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
-//		style = "path-style"
-//	}
-//
-//	if style == "path-style" {
-//		idx := strings.Index(uploadUrl.Path, "/")
-//		bucket = uploadUrl.Path[:idx]
-//		keyName = uploadUrl.Path[idx+1:]
-//	} else {
-//		hostname := uploadUrl.Hostname()
-//		idx := strings.Index(hostname, ".")
-//		bucket = hostname[:idx]
-//		keyName = uploadUrl.Path[1:] // skip first '/' char
-//	}
-//
-//	s, err := session.NewSession()
-//	if err != nil {
-//		printAwsError(err)
-//		msg<-dlMessage{sender:"uploader", err:err}
-//		return
-//	}
-//
-//	uploader := s3manager.NewUploader(s, func(u *s3manager.Uploader) {
-//		u.PartSize = 5*1024*1024 //TODO: this value has to be in sync with downloader buf
-//	})
-//	result, err := uploader.UploadWithContext(ctx, &s3manager.UploadInput{
-//		Bucket: aws.String(bucket),
-//		Key:    aws.String(keyName),
-//		Body:   newChanReader(ctx, data),
-//	})
-//	if err != nil {
-//		printAwsError(err)
-//		msg<-dlMessage{sender:"uploader", err:err}
-//		return
-//	}
-//
-//	log.Println("Successfully uploaded object to", result.Location)
-//	msg<-dlMessage{sender:"uploader", err:nil}
-//}
+func completeMultipart(ctx context.Context, s3client *s3.S3, bucket string,
+	keyName string, etags []*s3.CompletedPart, uploadId *string) error {
 
-// Performs concurrent multipart upload
-func uploadMultiPart(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage)  {
+	sort.Slice(etags, func(i, j int) bool {
+		return *etags[i].PartNumber < *etags[j].PartNumber
+	})
 
-	// helper function to allocate int64 and
-	// initialize it in one function call
-	var newInt64 = func(init int64) *int64 {
-		val := new(int64)
-		*val = init
-		return val
+	cmpuInput := &s3.CompleteMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(keyName),
+		MultipartUpload: &s3.CompletedMultipartUpload{
+			Parts: etags,
+		},
+		UploadId: uploadId,
 	}
 
-	var bucket  string
-	var keyName string
-
-	var partNumber int64 = 1 // part number must start from 1 according to AWS SDK
-	var totalBytes int64
-
-	uploadUrl, err := url.Parse(uri)
+	_, err := s3client.CompleteMultipartUploadWithContext(ctx, cmpuInput)
 	if err != nil {
-		msg<-dlMessage{sender:"uploader", err:err}
-		return
+		return err
 	}
 
-	style, ok := options["bucketNameStyle"]
-	if !ok {
-		// set 'path-style' bucket name by default
-		// see https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
-		style = "path-style"
-	}
+	return nil
+}
 
-	if style == "path-style" {
-		idx := strings.Index(uploadUrl.Path, "/")
-		bucket = uploadUrl.Path[:idx]
-		keyName = uploadUrl.Path[idx+1:]
-	} else {
-		hostname := uploadUrl.Hostname()
-		idx := strings.Index(hostname, ".")
-		bucket = hostname[:idx]
-		keyName = uploadUrl.Path[1:] // skip first '/' char
-	}
+func uploadWhole(ctx context.Context, s3client *s3.S3, filePath string, bucket string, keyName string) error {
 
-	s, err := session.NewSession()
+	file, err := os.Open(filePath)
 	if err != nil {
-		printAwsError(err)
-		msg<-dlMessage{sender:"uploader", err:err}
-		return
+		return err
 	}
+	defer file.Close()
 
-	s3client := s3.New(s)
-
-	mpuInput := &s3.CreateMultipartUploadInput{
+	input := &s3.PutObjectInput{
+		Body:   file,
 		Bucket: aws.String(bucket),
 		Key:    aws.String(keyName),
 	}
 
-	// initiate multipart upload
-	log.Println("Start upload")
-	mpu, err := s3client.CreateMultipartUploadWithContext(ctx, mpuInput)
+	_, err = s3client.PutObjectWithContext(ctx, input)
 	if err != nil {
-		printAwsError(err)
-		msg<-dlMessage{sender:"uploader", err:err}
-		return
+		return err
 	}
 
-	etags := make([]*s3.CompletedPart, 0)
-
-	for {
-		select {
-		case chunk, ok := <-data: {
-			if !ok { // channel closed
-				sort.Slice(etags, func(i, j int) bool {
-					return *etags[i].PartNumber < *etags[j].PartNumber
-				})
-
-				cmpuInput := &s3.CompleteMultipartUploadInput{
-					Bucket: aws.String(bucket),
-					Key:    aws.String(keyName),
-					MultipartUpload: &s3.CompletedMultipartUpload{
-						Parts: etags,
-					},
-					UploadId: mpu.UploadId,
-				}
-
-				log.Println("Finishing upload...")
-				result, err := s3client.CompleteMultipartUploadWithContext(ctx, cmpuInput)
-				if err != nil {
-					printAwsError(err)
-					msg<-dlMessage{sender:"uploader", err:err}
-					return
-				}
-
-				log.Println("Successfully uploaded object", *result.Key, "to bucket. Etag:", *result.Bucket, *result.ETag)
-				log.Println("Total size:", totalBytes)
-
-				msg<-dlMessage{sender:"uploader", err:nil}
-				return
-			}
-			log.Printf("Uploading %v bytes...\n", len(chunk.data))
-
-			// put it in a separate function
-			// to turn it into a goroutine
-			func(buf []byte, pn int64) {
-				bufReader := bytes.NewReader(buf)
-				input := &s3.UploadPartInput{
-					Body:       bufReader,
-					Bucket:     aws.String(bucket),
-					Key:        aws.String(keyName),
-					PartNumber: aws.Int64(pn),
-					UploadId:   mpu.UploadId,
-				}
-				result, err := s3client.UploadPartWithContext(ctx, input)
-				if err != nil {
-					printAwsError(err)
-					msg<-dlMessage{sender:"uploader", err:err}
-					return
-				}
-				etags = append(etags, &s3.CompletedPart{ETag:result.ETag, PartNumber:newInt64(pn)})
-				totalBytes += bufReader.Size()
-			}(chunk.data, partNumber)  // bytes read, not buffer size
-
-			partNumber++
-		}
-		case <-ctx.Done(): // there is cancellation
-			msg<-dlMessage{sender:"uploader", err:ctx.Err()}
-			return
-		}
-	}
+	return nil
 }
 
 func printAwsError(err error) {

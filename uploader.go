@@ -15,6 +15,7 @@ import (
     "path/filepath"
     "sort"
     "strings"
+	"sync"
 )
 
 type Uploader interface {
@@ -143,10 +144,16 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
     var mpu   *s3.CreateMultipartUploadOutput
 
     const MinAwsPartSize = 5*1024*1024
+    const MaxWorkers     = 5
 
     errchan   := make(chan error)
+	workers   := make(chan struct{}, MaxWorkers)
     etagschan := make(chan *s3.CompletedPart)
     etags     := make([]*s3.CompletedPart, 0)
+
+	defer func() {
+		close(workers) // making sure its not stuck on workers when error happens
+	}()
 
     go func() {
         for {
@@ -156,7 +163,12 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
                     return
                 }
                 etags = append(etags, et)
+				<-workers
             case <-opErrCtx.Done():
+            	// drain workers in case it might be stuck in [workers <- struct{}{}]
+				for len(workers) > 0 {
+					<-workers
+				}
                 return
             }
         }
@@ -164,6 +176,8 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 
     isMultipart := false
     isLastChunk := false
+
+	var wg sync.WaitGroup
 
     for !isLastChunk {
         select {
@@ -217,7 +231,10 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
                 }
                 file = nil
                 if isMultipart {
-                    uploadPart(opErrCtx, s3client, fpath, bucket, keyName, counter, mpu.UploadId, etagschan, errchan)
+					workers <- struct{}{}
+					wg.Add(1)
+                    go uploadPart(opErrCtx, s3client, fpath, bucket, keyName,
+                    	counter, mpu.UploadId, etagschan, errchan, &wg)
                     total = 0
                     counter += 1
                 }
@@ -237,13 +254,14 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
         }
     }
 
+    wg.Wait()
+
     if isMultipart {
         err = completeMultipart(opErrCtx, s3client, bucket, keyName, etags, mpu.UploadId)
     } else {
         err = uploadWhole(opErrCtx, s3client, fpath, bucket, keyName)
     }
     if err != nil {
-        //cancel()
         msg<-dlMessage{sender:"uploader", err:err}
         return
     }
@@ -251,7 +269,10 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
     msg<-dlMessage{sender:"uploader", err:nil}
 }
 
-func uploadPart(ctx context.Context, s3client *s3.S3, filePath string, bucket string, keyName string, pn int64, uploadId *string, etags chan *s3.CompletedPart, errchan chan error) {
+func uploadPart(ctx context.Context, s3client *s3.S3, filePath string, bucket string, keyName string,
+	pn int64, uploadId *string, etags chan *s3.CompletedPart, errchan chan error, wg *sync.WaitGroup) {
+
+	defer wg.Done()
     // helper function to allocate int64 and
     // initialize it in one function call
     var newInt64 = func(init int64) *int64 {

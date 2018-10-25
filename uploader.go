@@ -62,7 +62,7 @@ func (c *chanReader) Read(p []byte) (int, error) {
 	}
 	select {
 	case chunk, ok := <-c.data:
-		if !ok && len(c.data) == 0 { // channel closed and no data left
+		if !ok { // channel closed and no data left
 			return 0, io.EOF
 		}
 		bc := copy(p, chunk.data)
@@ -200,7 +200,7 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 		for {
 			select {
 			case et, ok := <-etagschan:
-				if !ok && len(etagschan) == 0 {
+				if !ok {
 					return
 				}
 				etags = append(etags, et)
@@ -210,9 +210,13 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 		}
 	}()
 
-	for {
+	isMultipart := false
+	isLastChunk := false
+
+	for !isLastChunk {
 		select {
 		case chunk, ok := <-data:
+
 			if file == nil {
 				// build part file name
 				fileName := fmt.Sprintf("%v.part", counter)
@@ -230,7 +234,7 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 			//	close(etagschan)
 			//	return
 			//}
-			lastChunk := !ok && len(data) == 0 // channel closed and no data left
+			isLastChunk = !ok && len(data) == 0 // channel closed and no data left
 
 			if chunk.size > 0 {
 				bw, err := file.Write(chunk.data)
@@ -242,16 +246,9 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 				total += int64(bw)
 			}
 
-			if total > MinAwsPartSize || lastChunk {
-				if err := file.Close(); err != nil {
-					cancel()
-					msg<-dlMessage{sender:"uploader", err:err}
-					return
-				}
-				file = nil
-				if lastChunk {
+			readyUpload := isLastChunk
 
-				}
+			if total > MinAwsPartSize {
 				if mpu == nil { // this the very first part - init multipart upload
 					mpu, err = initMultipartUpload() // Warning: use '=' to refer to outer scope var not ':=' !
 					if err != nil {
@@ -259,10 +256,29 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 						msg<-dlMessage{sender:"uploader", err:err}
 						return
 					}
+					isMultipart = true
 				}
-				uploadPart(opErrCtx, s3client, fpath, bucket, keyName, counter, mpu.UploadId, etagschan, errchan)
-				total = 0
-				counter += 1
+				readyUpload = true
+			}
+
+			if readyUpload {
+				if err := file.Close(); err != nil {
+					cancel()
+					msg<-dlMessage{sender:"uploader", err:err}
+					return
+				}
+				file = nil
+				if isMultipart {
+					// upload multi-part
+					uploadPart(opErrCtx, s3client, fpath, bucket, keyName, counter, mpu.UploadId, etagschan, errchan)
+					total = 0
+					counter += 1
+				}
+			}
+
+			if isLastChunk {
+				close(etagschan) // leave the helper goroutines
+				break
 			}
 		case err := <-errchan:
 			cancel()
@@ -273,6 +289,20 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 			return
 		}
 	}
+
+	if isMultipart {
+		// complete multi-part
+	} else {
+		// upload single-part
+		err := uploadWhole(opErrCtx, s3client, fpath, bucket, keyName)
+		if err != nil {
+			cancel()
+			msg<-dlMessage{sender:"uploader", err:err}
+			return
+		}
+	}
+
+	msg<-dlMessage{sender:"uploader", err:nil}
 }
 
 func uploadPart(ctx context.Context, s3client *s3.S3, filePath string, bucket string, keyName string, pn int64, uploadId *string, etags chan *s3.CompletedPart, errchan chan error) {

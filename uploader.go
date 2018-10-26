@@ -145,16 +145,36 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 	const MinAwsPartSize = 5 * 1024 * 1024
 	const MaxWorkers = 5 // can't be 0 !
 
-	errchan := make(chan error)
-	workers := make(chan struct{}, MaxWorkers)
+	errchan   := make(chan error)
+	workers   := make(chan struct{}, MaxWorkers)
 	etagschan := make(chan *s3.CompletedPart)
-	etags := make([]*s3.CompletedPart, 0)
+	etags     := make([]*s3.CompletedPart, 0)
 
 	isMultipart := false
 	isLastChunk := false
 	exitOnError := false
 
-	var wg sync.WaitGroup
+    var wg sync.WaitGroup
+
+    go func() {
+        for {
+            select {
+            case et, ok := <-etagschan:
+                if !ok {
+                    return
+                }
+                etags = append(etags, et)
+            case <-opErrCtx.Done():
+                return
+            }
+        }
+    }()
+
+    defer func() {
+        // the purpose of this is to let the helper goroutine
+        // exit once this function exists
+        close(etagschan)
+    }()
 
 	for !isLastChunk || exitOnError {
 		select {
@@ -219,9 +239,6 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 			if isLastChunk {
 				break
 			}
-
-		case etg := <-etagschan:
-			etags = append(etags, etg)
 
 		case err := <-errchan:
 			cancel()

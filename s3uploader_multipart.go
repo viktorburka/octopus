@@ -56,32 +56,6 @@ func (s *S3UploaderMultipart) Upload(ctx context.Context, uri string, options ma
 
 	s3client := s3.New(sess)
 
-	//buf := make([]byte, 5*1024*1024) // 5MB buffer matches AWS multipart requirement
-	//ptr := 0
-	//
-	//for {
-	//	select {
-	//	case chunk, ok := <-data:
-	//		chunkPtr := 0
-	//		for {
-	//			bc := copy(buf[ptr:], chunk.data[chunkPtr:])
-	//			ptr += bc
-	//			if ptr == len(buf) { // the buffer is full
-	//				uploadPart(buf)
-	//				buf = make([]byte, 5*1024*1024)
-	//				ptr = 0
-	//			}
-	//			if bc == len(chunk.data[chunkPtr:]) { // all data copied to the buffer
-	//				break
-	//			}
-	//			chunkPtr += bc
-	//		}
-	//	case <-ctx.Done(): // there is cancellation
-	//		msg <- dlMessage{sender: "uploader", err: ctx.Err()}
-	//		return
-	//	}
-	//}
-
 	tempDir, err := ioutil.TempDir(os.TempDir(), "")
 	if err != nil {
 		msg <- dlMessage{sender: "uploader", err: err}

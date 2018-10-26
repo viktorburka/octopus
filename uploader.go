@@ -208,10 +208,9 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 				}
 				file = nil
 				if isMultipart {
-					incrementWorkers(ctx, workers)
 					wg.Add(1)
 					go uploadPart(opErrCtx, s3client, fpath, bucket, keyName,
-						counter, mpu.UploadId, etagschan, errchan, &wg)
+						counter, mpu.UploadId, etagschan, errchan, &wg, workers)
 					total = 0
 					counter += 1
 				}
@@ -223,7 +222,6 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 
 		case etg := <-etagschan:
 			etags = append(etags, etg)
-			go decrementWorkers(ctx, workers) // calling in separate goroutine to avoid deadlock
 
 		case err := <-errchan:
 			cancel()
@@ -255,7 +253,11 @@ func upload(ctx context.Context, uri string, options map[string]string, data cha
 }
 
 func uploadPart(ctx context.Context, s3client *s3.S3, filePath string, bucket string, keyName string,
-	pn int64, uploadId *string, etags chan *s3.CompletedPart, errchan chan error, wg *sync.WaitGroup) {
+	pn int64, uploadId *string, etags chan *s3.CompletedPart, errchan chan error, wg *sync.WaitGroup,
+	workers chan struct{}) {
+
+	workers <- struct{}{}
+	defer func() { <-workers }()
 
 	defer wg.Done()
 	// helper function to allocate int64 and
@@ -338,20 +340,6 @@ func uploadWhole(ctx context.Context, s3client *s3.S3, filePath string, bucket s
 	}
 
 	return nil
-}
-
-func incrementWorkers(ctx context.Context, workers chan struct{}) {
-	select {
-	case workers <- struct{}{}:
-	case <-ctx.Done():
-	}
-}
-
-func decrementWorkers(ctx context.Context, workers chan struct{}) {
-	select {
-	case <-workers:
-	case <-ctx.Done():
-	}
 }
 
 func (f *FileSaver) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {

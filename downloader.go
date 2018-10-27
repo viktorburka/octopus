@@ -26,6 +26,8 @@ func getDownloaderForScheme(scheme string) (dl Downloader, err error) {
        fallthrough
     case "https":
         return &HttpDownloader{}, nil
+    case "s3":
+        return &S3DownloaderAws{}, nil
     default:
         return nil, fmt.Errorf("download scheme %v is not supported", scheme)
     }

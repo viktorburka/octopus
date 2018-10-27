@@ -100,6 +100,12 @@ func (s *S3UploaderMultipart) Upload(ctx context.Context, uri string, options ma
 
 	var wg sync.WaitGroup
 
+	var setErrorState = func(err error) {
+		cancel()
+		msg <- dlMessage{sender: "uploader", err: err}
+		exitOnError = true
+	}
+
 	go func() {
 		for {
 			select {
@@ -131,9 +137,8 @@ func (s *S3UploaderMultipart) Upload(ctx context.Context, uri string, options ma
 				// create part file
 				file, err = os.Create(fpath)
 				if err != nil {
-					cancel()
-					msg <- dlMessage{sender: "uploader", err: err}
-					return
+					setErrorState(err)
+					break
 				}
 			}
 
@@ -142,9 +147,8 @@ func (s *S3UploaderMultipart) Upload(ctx context.Context, uri string, options ma
 			if chunk.size > 0 {
 				bw, err := file.Write(chunk.data)
 				if err != nil {
-					cancel()
-					msg <- dlMessage{sender: "uploader", err: err}
-					return
+					setErrorState(err)
+					break
 				}
 				total += int64(bw)
 			}
@@ -155,9 +159,8 @@ func (s *S3UploaderMultipart) Upload(ctx context.Context, uri string, options ma
 				if mpu == nil { // this the very first part - init multipart upload
 					mpu, err = initMultipartUpload() // Warning: use '=' to refer to outer scope var not ':=' !
 					if err != nil {
-						cancel()
-						msg <- dlMessage{sender: "uploader", err: err}
-						return
+						setErrorState(err)
+						break
 					}
 					isMultipart = true
 				}
@@ -166,9 +169,8 @@ func (s *S3UploaderMultipart) Upload(ctx context.Context, uri string, options ma
 
 			if readyUpload {
 				if err := file.Close(); err != nil {
-					cancel()
-					msg <- dlMessage{sender: "uploader", err: err}
-					return
+					setErrorState(err)
+					break
 				}
 				file = nil
 				if isMultipart {
@@ -184,7 +186,7 @@ func (s *S3UploaderMultipart) Upload(ctx context.Context, uri string, options ma
 				break
 			}
 
-		case err := <-errchan:
+		case err := <-errchan: // multipart upload error
 			cancel()
 			msg <- dlMessage{sender: "uploader", err: err}
 
@@ -194,9 +196,25 @@ func (s *S3UploaderMultipart) Upload(ctx context.Context, uri string, options ma
 		}
 	}
 
-	wg.Wait() // make sure all goroutines are finished
+	// make sure all goroutines are finished
+	wg.Wait()
+
+	// now its safe to close etagschan - no goroutines will write to it
+	close(etagschan)
 
 	if exitOnError {
+		// cancel multipart upload if any
+		if mpu != nil {
+			_, err := s3client.AbortMultipartUploadWithContext(ctx, &s3.AbortMultipartUploadInput {
+				Bucket:   aws.String(bucket),
+				Key:      aws.String(keyName),
+				UploadId: mpu.UploadId,
+			})
+			if err != nil {
+				err = fmt.Errorf("mulipart upload cancelation error: %v", err)
+				msg <- dlMessage{sender: "uploader", err: err}
+			}
+		}
 		return
 	}
 

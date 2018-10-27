@@ -1,4 +1,4 @@
-package main
+package netio
 
 import (
     "context"
@@ -6,7 +6,7 @@ import (
     "net/url"
 )
 
-func transfer(ctx context.Context, srcUrl string, dstUrl string, options map[string]string) error {
+func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[string]string) error {
 
     var src *url.URL
     var dst *url.URL

@@ -8,7 +8,8 @@ import (
     "github.com/mongodb/mongo-go-driver/mongo"
     "github.com/mongodb/mongo-go-driver/mongo/findopt"
     "github.com/mongodb/mongo-go-driver/mongo/mongoopt"
-    "log"
+	"github.com/viktorburka/octopus/netio"
+	"log"
     "time"
 )
 
@@ -102,7 +103,7 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
     // TODO: read options from the db
     opt := map[string]string{"bucketNameStyle": "path-style"}
 
-    if err := transfer(ctx, newJob.srcUrl, newJob.dstUrl, opt); err != nil {
+    if err := netio.Transfer(ctx, newJob.srcUrl, newJob.dstUrl, opt); err != nil {
         transErr = fmt.Errorf("can't perform transfer: %v", err)
         //status = failed
         update["status"] = failed

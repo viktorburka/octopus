@@ -69,14 +69,11 @@ func (s *S3DownloaderAws) Download(ctx context.Context, uri string,
 		return
 	}
 
-	const MinLenForConcurrent   = 10*1024*1024 // 10MB
-	const RangeDownloadPartSize = MinLenForConcurrent / 2
-
 	fmt.Println("File length:", *hr.ContentLength)
 	if hr.PartsCount != nil {
 		multipartDownload(ctx, bucket, keyName, data, msg, *hr.PartsCount, *hr.ContentLength)
-	} else if *hr.ContentLength > MinLenForConcurrent {
-		rangeDownload(ctx, bucket, keyName, data, msg, RangeDownloadPartSize, *hr.ContentLength)
+	} else if *hr.ContentLength > MinAwsPartSize {
+		rangeDownload(ctx, bucket, keyName, data, msg, MinAwsPartSize, *hr.ContentLength)
 	} else {
 		singlePartDownload(ctx, bucket, keyName, data, msg, *hr.ContentLength)
 	}

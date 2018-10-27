@@ -86,7 +86,6 @@ func (s *S3UploaderMultipart) Upload(ctx context.Context, uri string, options ma
 	var file *os.File
 	var mpu *s3.CreateMultipartUploadOutput
 
-	const MinAwsPartSize = 5 * 1024 * 1024
 	const MaxWorkers = 5 // can't be 0 !
 
 	errchan   := make(chan error)

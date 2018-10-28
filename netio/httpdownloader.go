@@ -3,6 +3,7 @@ package netio
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -26,29 +27,33 @@ func (h *HttpDownloader) Download(ctx context.Context, uri string, options map[s
 	}
 	defer resp.Body.Close()
 
-	var totalBytes uint64
+	if resp.ContentLength == -1 { // ContentLength unknown
+		err := fmt.Errorf("can't start download: ContentLength unknown")
+		msg<-dlMessage{sender:"downloader", err: err}
+		return
+	}
+
+	var totalBytesRead int64
 
 	// read data
 	reader := bufio.NewReader(resp.Body)
+	buffer := make([]byte, 3*1024*1024) // 3MB
 	for {
-		//TODO: frequent allocations - improve to reuse the buffer
 		log.Println("downloader: reading data...")
-		buf := make([]byte, 3*1024*1024) // 3MB
-		br, err := reader.Read(buf)
+		br, err := reader.Read(buffer)
 		if err != nil && err != io.EOF { // its an error (io.EOF is fine)
 			msg<-dlMessage{sender:"downloader", err: err}
 			return
 		}
-		totalBytes += uint64(br)
-		log.Printf("downloader: received %v bytes\n", totalBytes)
-		data<-dlData{data:buf[:br], size:br}
+		totalBytesRead += int64(br)
+		log.Printf("downloader: received %v bytes\n", totalBytesRead)
+		data<-dlData{data:buffer[:br], br:totalBytesRead, total:resp.ContentLength}
 		if err == io.EOF { // done reading
 			close(data)
 			break
 		}
 	}
 
-	log.Println("download finished. total size:", totalBytes)
+	log.Println("download finished. total size:", totalBytesRead)
 	msg<-dlMessage{sender:"downloader", err: nil}
 }
-

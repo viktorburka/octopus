@@ -6,9 +6,10 @@ import (
 )
 
 type dlData struct {
-    data []byte
-    size int
-    done bool
+    data  []byte // data
+    done  bool   // download complete
+    br    int64  // bytes read
+	total int64  // total bytes
 }
 
 type dlMessage struct {
@@ -27,7 +28,7 @@ func getDownloaderForScheme(scheme string) (dl Downloader, err error) {
     case "https":
         return &HttpDownloader{}, nil
     case "s3":
-        return &S3DownloaderAws{}, nil
+        return &S3Downloader{}, nil
     default:
         return nil, fmt.Errorf("download scheme %v is not supported", scheme)
     }

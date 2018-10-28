@@ -9,14 +9,14 @@ type Uploader interface {
 	Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage)
 }
 
-const MinAwsPartSize = 5 * 1024 * 1024
+const MinAwsPartSize = 5 * 1024 * 1024 // 5MB
 
 func getUploaderForScheme(scheme string) (dl Uploader, err error) {
 	switch scheme {
 	case "file":
 		return &FileSaver{}, nil
 	case "s3":
-		return &S3UploaderMultipart{}, nil
+		return &S3Uploader{}, nil
 	default:
 		return nil, fmt.Errorf("upload scheme %v is not supported", scheme)
 	}

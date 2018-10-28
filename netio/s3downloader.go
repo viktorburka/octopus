@@ -1,19 +1,22 @@
 package netio
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"io"
+	"log"
 	"net/url"
 	"strings"
 )
 
-type S3DownloaderAws struct {
+type S3Downloader struct {
 }
 
-func (s *S3DownloaderAws) Download(ctx context.Context, uri string,
+func (s *S3Downloader) Download(ctx context.Context, uri string,
 	options map[string]string, data chan dlData, msg chan dlMessage) {
 
 	var bucket  string
@@ -70,15 +73,14 @@ func (s *S3DownloaderAws) Download(ctx context.Context, uri string,
 	}
 
 	fmt.Println("File length:", *hr.ContentLength)
-	if hr.PartsCount != nil {
-		multipartDownload(ctx, bucket, keyName, data, msg, *hr.PartsCount, *hr.ContentLength)
-	} else if *hr.ContentLength > MinAwsPartSize {
-		rangeDownload(ctx, bucket, keyName, data, msg, MinAwsPartSize, *hr.ContentLength)
+
+	if *hr.ContentLength > MinAwsPartSize {
+		rangedDownload(ctx, s3client, bucket, keyName, data, msg, MinAwsPartSize, *hr.ContentLength)
 	} else {
-		singlePartDownload(ctx, bucket, keyName, data, msg, *hr.ContentLength)
+		singleDownload(ctx, s3client, bucket, keyName, data, msg, *hr.ContentLength)
 	}
 
-	msg <- dlMessage{sender: "downloader", err: fmt.Errorf("this is not an error")}
+	//msg <- dlMessage{sender: "downloader", err: nil}
 
 	//result, err := s3client.GetObjectWithContext(opErrCtx, &s3.GetObjectInput{
 	//	Bucket: aws.String(bucket),
@@ -93,17 +95,46 @@ func (s *S3DownloaderAws) Download(ctx context.Context, uri string,
 	//fmt.Println("")
 }
 
-func multipartDownload(ctx context.Context, bucket string, key string, data chan dlData,
-	msg chan dlMessage, partsCount int64, contentLength int64) {
-
-}
-
-func rangeDownload(ctx context.Context, bucket string, key string, data chan dlData,
+func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key string, data chan dlData,
 	msg chan dlMessage, partSize int64, contentLength int64)  {
 
 }
 
-func singlePartDownload(ctx context.Context, bucket string, key string, data chan dlData,
+func singleDownload(ctx context.Context, s3client *s3.S3, bucket string, key string, data chan dlData,
 	msg chan dlMessage, contentLength int64)  {
 
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}
+
+	result, err := s3client.GetObjectWithContext(ctx, input)
+	if err != nil {
+		msg <- dlMessage{sender: "downloader", err: err}
+		return
+	}
+	defer result.Body.Close()
+
+	var totalBytesRead int64
+
+	// read data
+	reader := bufio.NewReader(result.Body)
+	buffer := make([]byte, MinAwsPartSize)
+	for {
+		br, err := reader.Read(buffer)
+		if err != nil && err != io.EOF { // its an error (io.EOF is fine)
+			msg<-dlMessage{sender:"downloader", err: err}
+			return
+		}
+		totalBytesRead += int64(br)
+		log.Printf("downloader: received %v bytes\n", totalBytesRead)
+		data<-dlData{data:buffer[:br], br:totalBytesRead, total:contentLength}
+		if err == io.EOF { // done reading
+			close(data)
+			break
+		}
+	}
+
+	log.Println("download finished. total size:", totalBytesRead)
+	msg<-dlMessage{sender:"downloader", err: nil}
 }

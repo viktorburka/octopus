@@ -15,10 +15,10 @@ import (
 	"sync"
 )
 
-type S3UploaderMultipart struct {
+type S3Uploader struct {
 }
 
-func (s *S3UploaderMultipart) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
+func (s *S3Uploader) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
 
 	var bucket string
 	var keyName string
@@ -143,7 +143,7 @@ func (s *S3UploaderMultipart) Upload(ctx context.Context, uri string, options ma
 
 			isLastChunk = !ok // channel closed and no data left
 
-			if chunk.size > 0 {
+			if len(chunk.data) > 0 {
 				bw, err := file.Write(chunk.data)
 				if err != nil {
 					setErrorState(err)

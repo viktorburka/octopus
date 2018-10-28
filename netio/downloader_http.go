@@ -9,10 +9,10 @@ import (
 	"net/http"
 )
 
-type HttpDownloader struct {
+type DownloaderHttp struct {
 }
 
-func (h *HttpDownloader) Download(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
+func (h *DownloaderHttp) Download(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
 	// start download
 	client := &http.Client{} //TODO: might also instantiate it once
 	req, err := http.NewRequest("GET", uri, nil)

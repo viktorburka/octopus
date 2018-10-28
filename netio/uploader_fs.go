@@ -11,12 +11,12 @@ import (
 	"path/filepath"
 )
 
-// FileSaver is mostly for testing purposes to store locally
+// UploaderLocalFile is mostly for testing purposes to store locally
 // whats downloaded by different schemas to verify
-type FileSaver struct {
+type UploaderLocalFile struct {
 }
 
-func (f *FileSaver) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
+func (f *UploaderLocalFile) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
 
 	log.Println("Prepare upload. Constructing temp folder...")
 

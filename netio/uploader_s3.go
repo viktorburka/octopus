@@ -128,6 +128,7 @@ func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]
 	go func() {
 		defer wg.Done()
 		defer close(etagschan)
+
 		var wg2 sync.WaitGroup
 		for !isLastChunk || exitOnError {
 			select {
@@ -145,7 +146,7 @@ func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]
 					}
 				}
 
-				isLastChunk = !ok // channel closed and no data left
+				isLastChunk = !ok || chunk.done // channel closed and no data left
 
 				if len(chunk.data) > 0 {
 					bw, err := file.Write(chunk.data)
@@ -177,6 +178,7 @@ func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]
 					}
 					file = nil
 					if isMultipart {
+						workers <- struct{}{}
 						wg2.Add(1)
 						go uploadPart(opErrCtx, s3client, fpath, bucket, keyName,
 							counter, mpu.UploadId, etagschan, errchan, &wg2, workers)
@@ -237,7 +239,6 @@ func uploadPart(ctx context.Context, s3client *s3.S3, filePath string, bucket st
 	pn int64, uploadId *string, etags chan *s3.CompletedPart, errchan chan error, wg *sync.WaitGroup,
 	workers chan struct{}) {
 
-	workers <- struct{}{}
 	defer func() { <-workers }()
 
 	defer wg.Done()

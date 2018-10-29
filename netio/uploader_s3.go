@@ -21,7 +21,7 @@ import (
 type UploaderS3 struct {
 }
 
-func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
+func (s UploaderS3) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
 
 	var bucket  string
 	var keyName string

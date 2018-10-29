@@ -20,7 +20,7 @@ import (
 type DownloaderS3 struct {
 }
 
-func (s *DownloaderS3) Download(ctx context.Context, uri string,
+func (s DownloaderS3) Download(ctx context.Context, uri string,
 	options map[string]string, data chan dlData, msg chan dlMessage) {
 
 	var bucket string

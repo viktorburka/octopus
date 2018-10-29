@@ -16,7 +16,7 @@ import (
 type UploaderLocalFile struct {
 }
 
-func (f *UploaderLocalFile) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
+func (f UploaderLocalFile) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
 
 	log.Println("Prepare upload. Constructing temp folder...")
 

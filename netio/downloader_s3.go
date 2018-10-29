@@ -144,7 +144,7 @@ func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key str
 					msg <- dlMessage{sender: "downloader", err: err}
 					return
 				}
-				//defer result.Body.Close() //TODO: move from here !!!
+				defer result.Body.Close()
 
 				fileName := fmt.Sprintf("%v.part", curPart)
 				filePath := filepath.Join(tempDir, fileName)
@@ -154,7 +154,7 @@ func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key str
 					msg <- dlMessage{sender: "downloader", err: err}
 					return
 				}
-				//defer file.Close()
+				defer file.Close()
 
 				bsaved := int64(0)
 				buffer := make([]byte, partSize)

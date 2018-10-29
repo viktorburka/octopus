@@ -8,7 +8,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/url"
 	"os"
@@ -70,8 +69,6 @@ func (s *DownloaderS3) Download(ctx context.Context, uri string,
 		return
 	}
 
-	fmt.Println("File length:", *hr.ContentLength)
-
 	if *hr.ContentLength >= MinAwsPartSize {
 		rangedDownload(ctx, s3client, bucket, keyName, data, msg, MinAwsPartSize, *hr.ContentLength)
 	} else {
@@ -88,14 +85,17 @@ func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key str
 		return
 	}
 
-	tempDir, err := ioutil.TempDir(os.TempDir(), "")
-	if err != nil {
-		msg <- dlMessage{sender: "downloader", err: err}
-		return
-	}
+	//tempDir, err := ioutil.TempDir(os.TempDir(), "")
+	//if err != nil {
+	//	msg <- dlMessage{sender: "downloader", err: err}
+	//	return
+	//}
+	tempDir := "/Users/vburka/Projects/temp/octopus/1"
+
+	//const MaxWorkers = 3
 
 	partschan := make(chan int)
-	defer close(partschan)
+	//workers   := make(chan struct{}, MaxWorkers)
 
 	opErrCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -119,10 +119,9 @@ func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key str
 		totalBytes := int64(0)
 
 		for totalBytes < contentLength {
-
 			start := totalBytes
-			end := min(totalBytes+partSize, contentLength)
-			rg := fmt.Sprintf("bytes=%v-%v", start, end-1)
+			end   := min(totalBytes+partSize, contentLength)
+			rg    := fmt.Sprintf("bytes=%v-%v", start, end-1)
 			input := &s3.GetObjectInput{
 				Bucket: aws.String(bucket),
 				Key:    aws.String(key),
@@ -134,7 +133,7 @@ func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key str
 				msg <- dlMessage{sender: "downloader", err: err}
 				return
 			}
-			defer result.Body.Close() //TODO: move from here !!!
+			//defer result.Body.Close() //TODO: move from here !!!
 
 			fileName := fmt.Sprintf("%v.part", partNumber)
 			filePath := filepath.Join(tempDir, fileName)
@@ -144,20 +143,43 @@ func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key str
 				msg <- dlMessage{sender: "downloader", err: err}
 				return
 			}
+			//defer file.Close()
 
-			reader := bufio.NewReader(result.Body)
-			writer := bufio.NewWriter(file)
+			bsaved := int64(0)
+			buffer := make([]byte, partSize)
 
-			//TODO: might be long and blocking operation - can't use it here
-			bw, err := io.Copy(writer, reader)
-			if err != nil {
-				msg <- dlMessage{sender: "downloader", err: err}
-				return
+			for {
+				br, err := result.Body.Read(buffer)
+				if err != nil && err != io.EOF { // its an error (io.EOF is fine)
+					msg <- dlMessage{sender: "downloader", err: err}
+					return
+				}
+				// Looks like there might be a bug in AWS SDK when executing ranged request
+				// It is supposed to return io.EOF but instead returns nil and 0 bytes
+				// Therefore put this condition as temporary solution
+				if br == 0 {
+					break
+				}
+				bw, err := file.Write(buffer[:br])
+				if err != nil {
+					msg <- dlMessage{sender: "downloader", err: err}
+					return
+				}
+				bsaved += int64(bw)
+				if err == io.EOF { // done reading
+					break
+				}
 			}
 
 			// making sure all bytes have been read
-			if bw != *result.ContentLength {
+			if bsaved != *result.ContentLength {
 				msg <- dlMessage{sender: "downloader", err: fmt.Errorf("incomplete write operation")}
+				return
+			}
+
+			// done writing - close file
+			if err := file.Close(); err != nil {
+				msg <- dlMessage{sender: "downloader", err: err}
 				return
 			}
 
@@ -170,7 +192,7 @@ func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key str
 			partschan <- partNumber
 
 			partNumber++
-			totalBytes += bw
+			totalBytes += bsaved
 		}
 	}()
 
@@ -179,14 +201,12 @@ func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key str
 	go func() {
 		defer wg.Done()
 		var last = func(val int64) int64 {
-			if val > 0 {
-				return 1
-			}
+			if val > 0 { return 1 }
 			return 0
 		}
 		parts := make([]bool, contentLength/partSize+last(contentLength%partSize))
-		ptr := 0
-		sent := int64(0)
+		ptr   := 0
+		sent  := int64(0)
 		for {
 			select {
 			case part, ok := <-partschan:
@@ -220,6 +240,8 @@ func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key str
 	}()
 
 	wg.Wait()
+
+	close(data)
 }
 
 func writePart(ctx context.Context, filePath string, totalSent int64, totalSize int64, data chan dlData) (int, error) {

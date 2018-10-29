@@ -9,14 +9,13 @@ import (
 
 func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[string]string) error {
 
-	var src *url.URL
-	var dst *url.URL
-
-	if _, err := url.Parse(srcUrl); err != nil {
+	src, err := url.Parse(srcUrl)
+	if err != nil {
 		return fmt.Errorf("invalid srcUrl %v", err)
 	}
 
-	if _, err := url.Parse(dstUrl); err != nil {
+	dst, err := url.Parse(dstUrl)
+	if err != nil {
 		return fmt.Errorf("invalid dstUrl %v", err)
 	}
 
@@ -60,9 +59,6 @@ func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[str
 
 	// wait until transfer complete or error
 	wg.Wait()
-
-	// close commchan to finish helper goroutine
-	close(commchan)
 
 	return transferError
 }

@@ -23,7 +23,7 @@ type UploaderS3 struct {
 
 func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
 
-	var bucket string
+	var bucket  string
 	var keyName string
 	var counter int64 = 1
 
@@ -86,15 +86,15 @@ func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]
 
 	var total int64
 	var fpath string
-	var file *os.File
-	var mpu *s3.CreateMultipartUploadOutput
+	var file  *os.File
+	var mpu   *s3.CreateMultipartUploadOutput
 
 	const MaxWorkers = 5 // can't be 0 !
 
-	errchan := make(chan error)
-	workers := make(chan struct{}, MaxWorkers)
+	errchan   := make(chan error)
+	workers   := make(chan struct{}, MaxWorkers)
 	etagschan := make(chan *s3.CompletedPart)
-	etags := make([]*s3.CompletedPart, 0)
+	etags     := make([]*s3.CompletedPart, 0)
 
 	isMultipart := false
 	isLastChunk := false
@@ -128,6 +128,7 @@ func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]
 	go func() {
 		defer wg.Done()
 		defer close(etagschan)
+		var wg2 sync.WaitGroup
 		for !isLastChunk || exitOnError {
 			select {
 			case chunk, ok := <-data:
@@ -157,7 +158,7 @@ func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]
 
 				readyUpload := isLastChunk
 
-				if total > MinAwsPartSize {
+				if total >= MinAwsPartSize {
 					if mpu == nil { // this the very first part - init multipart upload
 						mpu, err = initMultipartUpload() // Warning: use '=' to refer to outer scope var not ':=' !
 						if err != nil {
@@ -176,9 +177,9 @@ func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]
 					}
 					file = nil
 					if isMultipart {
-						wg.Add(1)
+						wg2.Add(1)
 						go uploadPart(opErrCtx, s3client, fpath, bucket, keyName,
-							counter, mpu.UploadId, etagschan, errchan, &wg, workers)
+							counter, mpu.UploadId, etagschan, errchan, &wg2, workers)
 						total = 0
 						counter += 1
 					}
@@ -197,6 +198,7 @@ func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]
 				exitOnError = true
 			}
 		}
+		wg2.Wait()
 	}()
 
 	// make sure all goroutines are finished

@@ -91,10 +91,10 @@ func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]
 
 	const MaxWorkers = 5 // can't be 0 !
 
-	errchan   := make(chan error)
-	workers   := make(chan struct{}, MaxWorkers)
+	errchan := make(chan error)
+	workers := make(chan struct{}, MaxWorkers)
 	etagschan := make(chan *s3.CompletedPart)
-	etags     := make([]*s3.CompletedPart, 0)
+	etags := make([]*s3.CompletedPart, 0)
 
 	isMultipart := false
 	isLastChunk := false
@@ -108,7 +108,9 @@ func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]
 		exitOnError = true
 	}
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			select {
 			case et, ok := <-etagschan:
@@ -122,92 +124,88 @@ func (s *UploaderS3) Upload(ctx context.Context, uri string, options map[string]
 		}
 	}()
 
-	defer func() {
-		// the purpose of this is to let the helper goroutine
-		// exit once this function exists
-		close(etagschan)
-	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(etagschan)
+		for !isLastChunk || exitOnError {
+			select {
+			case chunk, ok := <-data:
 
-	for !isLastChunk || exitOnError {
-		select {
-		case chunk, ok := <-data:
-
-			if file == nil {
-				// build part file name
-				fileName := fmt.Sprintf("%v.part", counter)
-				fpath = filepath.Join(tempDir, fileName)
-				// create part file
-				file, err = os.Create(fpath)
-				if err != nil {
-					setErrorState(err)
-					break
-				}
-			}
-
-			isLastChunk = !ok // channel closed and no data left
-
-			if len(chunk.data) > 0 {
-				bw, err := file.Write(chunk.data)
-				if err != nil {
-					setErrorState(err)
-					break
-				}
-				total += int64(bw)
-			}
-
-			readyUpload := isLastChunk
-
-			if total > MinAwsPartSize {
-				if mpu == nil { // this the very first part - init multipart upload
-					mpu, err = initMultipartUpload() // Warning: use '=' to refer to outer scope var not ':=' !
+				if file == nil {
+					// build part file name
+					fileName := fmt.Sprintf("%v.part", counter)
+					fpath = filepath.Join(tempDir, fileName)
+					// create part file
+					file, err = os.Create(fpath)
 					if err != nil {
 						setErrorState(err)
 						break
 					}
-					isMultipart = true
 				}
-				readyUpload = true
-			}
 
-			if readyUpload {
-				if err := file.Close(); err != nil {
-					setErrorState(err)
+				isLastChunk = !ok // channel closed and no data left
+
+				if len(chunk.data) > 0 {
+					bw, err := file.Write(chunk.data)
+					if err != nil {
+						setErrorState(err)
+						break
+					}
+					total += int64(bw)
+				}
+
+				readyUpload := isLastChunk
+
+				if total > MinAwsPartSize {
+					if mpu == nil { // this the very first part - init multipart upload
+						mpu, err = initMultipartUpload() // Warning: use '=' to refer to outer scope var not ':=' !
+						if err != nil {
+							setErrorState(err)
+							break
+						}
+						isMultipart = true
+					}
+					readyUpload = true
+				}
+
+				if readyUpload {
+					if err := file.Close(); err != nil {
+						setErrorState(err)
+						break
+					}
+					file = nil
+					if isMultipart {
+						wg.Add(1)
+						go uploadPart(opErrCtx, s3client, fpath, bucket, keyName,
+							counter, mpu.UploadId, etagschan, errchan, &wg, workers)
+						total = 0
+						counter += 1
+					}
+				}
+
+				if isLastChunk {
 					break
 				}
-				file = nil
-				if isMultipart {
-					wg.Add(1)
-					go uploadPart(opErrCtx, s3client, fpath, bucket, keyName,
-						counter, mpu.UploadId, etagschan, errchan, &wg, workers)
-					total = 0
-					counter += 1
-				}
+
+			case err := <-errchan: // multipart upload error
+				cancel()
+				msg <- dlMessage{sender: "uploader", err: err}
+
+			case <-opErrCtx.Done(): // there is cancellation
+				msg <- dlMessage{sender: "uploader", err: ctx.Err()}
+				exitOnError = true
 			}
-
-			if isLastChunk {
-				break
-			}
-
-		case err := <-errchan: // multipart upload error
-			cancel()
-			msg <- dlMessage{sender: "uploader", err: err}
-
-		case <-ctx.Done(): // there is cancellation
-			msg <- dlMessage{sender: "uploader", err: ctx.Err()}
-			exitOnError = true
 		}
-	}
+	}()
 
 	// make sure all goroutines are finished
 	wg.Wait()
 
-	// now its safe to close etagschan - no goroutines will write to it
-	close(etagschan)
-
 	if exitOnError {
 		// cancel multipart upload if any
 		if mpu != nil {
-			_, err := s3client.AbortMultipartUploadWithContext(ctx, &s3.AbortMultipartUploadInput {
+			_, err := s3client.AbortMultipartUploadWithContext(ctx, &s3.AbortMultipartUploadInput{
 				Bucket:   aws.String(bucket),
 				Key:      aws.String(keyName),
 				UploadId: mpu.UploadId,
@@ -324,9 +322,9 @@ func uploadWhole(ctx context.Context, s3client *s3.S3, filePath string, bucket s
 }
 
 type chanReader struct {
-	ctx context.Context
+	ctx  context.Context
 	data chan dlData
-	rem []byte
+	rem  []byte
 }
 
 func (c *chanReader) Read(p []byte) (int, error) {
@@ -349,7 +347,7 @@ func (c *chanReader) Read(p []byte) (int, error) {
 }
 
 func newChanReader(ctx context.Context, data chan dlData) *chanReader {
-	return &chanReader{ctx: ctx, data: data, rem: make([]byte,0)}
+	return &chanReader{ctx: ctx, data: data, rem: make([]byte, 0)}
 }
 
 type UploaderS3Manager struct {
@@ -357,12 +355,12 @@ type UploaderS3Manager struct {
 
 func (s *UploaderS3Manager) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
 
-	var bucket  string
+	var bucket string
 	var keyName string
 
 	uploadUrl, err := url.Parse(uri)
 	if err != nil {
-		msg<-dlMessage{sender:"uploader", err:err}
+		msg <- dlMessage{sender: "uploader", err: err}
 		return
 	}
 
@@ -386,12 +384,12 @@ func (s *UploaderS3Manager) Upload(ctx context.Context, uri string, options map[
 
 	sess, err := session.NewSession()
 	if err != nil {
-		msg<-dlMessage{sender:"uploader", err:err}
+		msg <- dlMessage{sender: "uploader", err: err}
 		return
 	}
 
 	uploader := s3manager.NewUploader(sess, func(u *s3manager.Uploader) {
-		u.PartSize = 5*1024*1024
+		u.PartSize = 5 * 1024 * 1024
 	})
 	result, err := uploader.UploadWithContext(ctx, &s3manager.UploadInput{
 		Bucket: aws.String(bucket),
@@ -399,10 +397,10 @@ func (s *UploaderS3Manager) Upload(ctx context.Context, uri string, options map[
 		Body:   newChanReader(ctx, data),
 	})
 	if err != nil {
-		msg<-dlMessage{sender:"uploader", err:err}
+		msg <- dlMessage{sender: "uploader", err: err}
 		return
 	}
 
 	log.Println("Successfully uploaded object to", result.Location)
-	msg<-dlMessage{sender:"uploader", err:nil}
+	msg <- dlMessage{sender: "uploader", err: nil}
 }

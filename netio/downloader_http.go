@@ -108,7 +108,7 @@ func (r *HttpReceiverSimple) CloseWithContext(ctx context.Context) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (h DownloaderHttp) GetFileInfo(ctx context.Context, uri string, options map[string]string) (FileInfo, error) {
+func (r *HttpReceiverSimple) GetFileInfo(ctx context.Context, uri string, options map[string]string) (FileInfo, error) {
 	var info FileInfo
 	client := &http.Client{} //TODO: might also instantiate it once
 	req, err := http.NewRequest("HEAD", uri, nil)

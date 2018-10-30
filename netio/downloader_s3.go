@@ -148,7 +148,7 @@ func (r *S3ReceiverMultipart) CloseWithContext(ctx context.Context) error {
 	return fmt.Errorf("not impelmented")
 }
 
-func (s DownloaderS3) GetFileInfo(ctx context.Context, uri string, options map[string]string) (FileInfo, error) {
+func (r *S3ReceiverMultipart) GetFileInfo(ctx context.Context, uri string, options map[string]string) (FileInfo, error) {
 
 	var info FileInfo
 	var bucket string

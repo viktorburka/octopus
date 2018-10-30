@@ -19,6 +19,7 @@ type dlMessage struct {
 }
 
 type receiver interface {
+	GetFileInfo(ctx context.Context, uri string, options map[string]string) (info FileInfo, err error)
 	OpenWithContext(ctx context.Context, uri string, opt map[string]string) error
 	IsOpen() bool
 	ReadPartWithContext(ctx context.Context, output io.WriteSeeker, opt map[string]string) (string, error)
@@ -31,25 +32,24 @@ type FileInfo struct {
 }
 
 type Downloader interface {
-	GetFileInfo(ctx context.Context, uri string, options map[string]string) (info FileInfo, err error)
     Download(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage, rc receiver)
 }
 
-func getProbeForScheme(scheme string) (dl Downloader, err error) {
-    switch scheme {
-    case "http":
-       fallthrough
-    case "https":
-        return DownloaderHttp{}, nil
-    case "s3":
-        return DownloaderS3{}, nil
-    default:
-        return nil, fmt.Errorf("download scheme %v is not supported", scheme)
-    }
+func getProbeForScheme(scheme string) (r receiver, err error) {
+    return getReceiver(scheme, 1)
 }
 
 func getDownloader(scheme string) (dl Downloader, err error) {
-	return getProbeForScheme(scheme)
+	switch scheme {
+	case "http":
+		fallthrough
+	case "https":
+		return DownloaderHttp{}, nil
+	case "s3":
+		return DownloaderS3{}, nil
+	default:
+		return nil, fmt.Errorf("download scheme %v is not supported", scheme)
+	}
 }
 
 func getReceiver(scheme string, size int64) (receiver, error) {

@@ -9,18 +9,18 @@ func TestKnownUploaderScheme(t *testing.T) {
 	var iface Uploader
 	var ok    bool
 
-	iface, _ = getUploaderForScheme("s3")
+	iface, _ = getUploader("s3")
 	if iface == nil {
 		t.Errorf("expected s3 uploader instance but received nil")
 		return
 	}
-	_, ok = iface.(UploaderS3)
+	_, ok = iface.(UploaderS3Multipart)
 	if !ok {
 		t.Errorf("expected type UploaderS3")
 		return
 	}
 
-	iface, _ = getUploaderForScheme("file")
+	iface, _ = getUploader("file")
 	if iface == nil {
 		t.Errorf("expected local file uploader instance but received nil")
 		return
@@ -36,7 +36,7 @@ func TestUnknownUploaderScheme(t *testing.T) {
 
 	var iface Uploader
 
-	iface, _ = getUploaderForScheme("unknown")
+	iface, _ = getUploader("unknown")
 	if iface != nil {
 		t.Errorf("expected nil value")
 		return

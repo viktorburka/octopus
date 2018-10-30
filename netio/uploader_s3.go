@@ -27,9 +27,6 @@ type S3SenderSimple struct {
 	s3client *s3.S3
 }
 
-//type UploaderS3Simple struct {
-//}
-
 type S3SenderMultipart struct {
 	m   sync.Mutex
 	opt map[string]string
@@ -344,6 +341,7 @@ func uploadPart(ctx context.Context, filePath string, pn int64, errchan chan err
 	}
 }
 
+
 func (s *S3SenderSimple) Init(opt map[string]string) {
 	s.m.Lock()
 	defer s.m.Unlock()
@@ -421,11 +419,6 @@ func (s *S3SenderSimple) CloseWithContext(ctx context.Context) error {
 	return nil
 }
 
-//func (s UploaderS3Simple) Upload(ctx context.Context, uri string, options map[string]string,
-//	data chan dlData, msg chan dlMessage, snd sender) {
-//
-//
-//}
 
 type chanReader struct {
 	ctx  context.Context
@@ -455,6 +448,7 @@ func (c *chanReader) Read(p []byte) (int, error) {
 func newChanReader(ctx context.Context, data chan dlData) *chanReader {
 	return &chanReader{ctx: ctx, data: data, rem: make([]byte, 0)}
 }
+
 
 type UploaderS3Manager struct {
 }

@@ -11,7 +11,7 @@ func TestKnownDownloaderScheme(t *testing.T) {
 	var iface Downloader
 	var ok    bool
 
-	iface, _ = getProbeForScheme("http")
+	iface, _ = getDownloader("http")
 	if iface == nil {
 		t.Errorf("expected http downloader instance but received nil")
 		return
@@ -22,7 +22,7 @@ func TestKnownDownloaderScheme(t *testing.T) {
 		return
 	}
 
-	iface, _ = getProbeForScheme("https")
+	iface, _ = getDownloader("https")
 	if iface == nil {
 		t.Errorf("expected https downloader instance but received nil")
 		return
@@ -33,7 +33,7 @@ func TestKnownDownloaderScheme(t *testing.T) {
 		return
 	}
 
-	iface, _ = getProbeForScheme("s3")
+	iface, _ = getDownloader("s3")
 	if iface == nil {
 		t.Errorf("expected s3 downloader instance but received nil")
 		return
@@ -49,7 +49,7 @@ func TestUnknownDownloaderScheme(t *testing.T) {
 
 	var iface Downloader
 
-	iface, _ = getProbeForScheme("unknown")
+	iface, _ = getDownloader("unknown")
 	if iface != nil {
 		t.Errorf("expected nil value")
 		return

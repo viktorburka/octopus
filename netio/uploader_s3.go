@@ -21,7 +21,6 @@ import (
 
 type S3SenderSimple struct {
 	m sync.Mutex
-	opt map[string]string
 	key string
 	bkt string
 	isOpen   bool
@@ -30,7 +29,6 @@ type S3SenderSimple struct {
 
 type S3SenderMultipart struct {
 	m   sync.Mutex
-	opt map[string]string
 	key string
 	bkt string
 	mpu      *s3.CreateMultipartUploadOutput
@@ -41,11 +39,6 @@ type S3SenderMultipart struct {
 type UploaderS3Multipart struct {
 }
 
-func (s *S3SenderMultipart) Init(opt map[string]string) {
-	s.m.Lock()
-	defer s.m.Unlock()
-	s.opt = opt
-}
 
 func (s *S3SenderMultipart) IsOpen() bool {
 	s.m.Lock()
@@ -54,7 +47,7 @@ func (s *S3SenderMultipart) IsOpen() bool {
 	return isOpen
 }
 
-func (s *S3SenderMultipart) OpenWithContext(ctx context.Context, uri string) error {
+func (s *S3SenderMultipart) OpenWithContext(ctx context.Context, uri string, opt map[string]string) error {
 
 	uploadUrl, err := url.Parse(uri)
 	if err != nil {
@@ -63,7 +56,7 @@ func (s *S3SenderMultipart) OpenWithContext(ctx context.Context, uri string) err
 
 	s.m.Lock()
 	s.etags = make([]*s3.CompletedPart, 0)
-	style, ok := s.opt["bucketNameStyle"]
+	style, ok := opt["bucketNameStyle"]
 	if !ok {
 		// set 'path-style' bucket name by default
 		// see https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
@@ -215,7 +208,7 @@ func (s UploaderS3Multipart) Upload(ctx context.Context, uri string, options map
 	opErrCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	if err := snd.OpenWithContext(opErrCtx, uri); err != nil {
+	if err := snd.OpenWithContext(opErrCtx, uri, options); err != nil {
 		msg <- dlMessage{sender: "uploader", err: err}
 		return
 	}
@@ -353,26 +346,20 @@ func uploadPart(ctx context.Context, filePath string, pn int64, errchan chan err
 }
 
 
-func (s *S3SenderSimple) Init(opt map[string]string) {
-	s.m.Lock()
-	defer s.m.Unlock()
-	s.opt = opt
-}
-
 func (s *S3SenderSimple) IsOpen() bool {
 	s.m.Lock()
 	defer s.m.Unlock()
 	return s.isOpen
 }
 
-func (s *S3SenderSimple) OpenWithContext(ctx context.Context, uri string) error {
+func (s *S3SenderSimple) OpenWithContext(ctx context.Context, uri string, opt map[string]string) error {
 	uploadUrl, err := url.Parse(uri)
 	if err != nil {
 		return err
 	}
 
 	s.m.Lock()
-	style, ok := s.opt["bucketNameStyle"]
+	style, ok := opt["bucketNameStyle"]
 	if !ok {
 		// set 'path-style' bucket name by default
 		// see https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro

@@ -7,9 +7,8 @@ import (
 )
 
 type sender interface {
-	Init(opt map[string]string)
+	OpenWithContext(ctx context.Context, uri string, opt map[string]string) error
 	IsOpen() bool
-	OpenWithContext(ctx context.Context, uri string) error
 	WritePartWithContext(ctx context.Context, input io.ReadSeeker, opt map[string]string) (string, error)
 	CancelWithContext(ctx context.Context) error
 	CloseWithContext(ctx context.Context) error

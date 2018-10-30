@@ -13,19 +13,14 @@ import (
 )
 
 type LocalFileSender struct {
-	opt map[string]string
 	ptr *os.File
-}
-
-func (s *LocalFileSender) Init(opt map[string]string) {
-	s.opt = opt
 }
 
 func (s *LocalFileSender) IsOpen() bool {
 	return s.ptr != nil
 }
 
-func (s *LocalFileSender) OpenWithContext(ctx context.Context, uri string) error {
+func (s *LocalFileSender) OpenWithContext(ctx context.Context, uri string, opt map[string]string) error {
 	var err error
 	s.ptr, err = os.Create(uri)
 	return err
@@ -78,7 +73,7 @@ func (f UploaderLocalFile) Upload(ctx context.Context, uri string, options map[s
 	fileName := path.Base(uploadUrl.Path)
 	tempFilePath := filepath.Join(tempDir, fileName)
 
-	err = s.OpenWithContext(context.Background(), tempFilePath)
+	err = s.OpenWithContext(context.Background(), tempFilePath, options)
 	if err != nil {
 		msg <- dlMessage{sender: "uploader", err: err}
 		return

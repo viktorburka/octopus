@@ -47,8 +47,6 @@ func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[str
 
 	options["contentLength"] = strconv.FormatInt(info.Size, 10)
 
-	sender.Init(options)
-
 	ioctx, cancel := context.WithCancel(ctx)
 
 	datachan := make(chan dlData)

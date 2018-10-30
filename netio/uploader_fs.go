@@ -1,8 +1,9 @@
 package netio
 
 import (
+	"bytes"
 	"context"
-	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/url"
@@ -11,12 +12,50 @@ import (
 	"path/filepath"
 )
 
+type LocalFileSender struct {
+	opt map[string]string
+	ptr *os.File
+}
+
+func (s *LocalFileSender) Init(opt map[string]string) {
+	s.opt = opt
+}
+
+func (s *LocalFileSender) IsOpen() bool {
+	return s.ptr != nil
+}
+
+func (s *LocalFileSender) OpenWithContext(ctx context.Context, uri string) error {
+	var err error
+	s.ptr, err = os.Create(uri)
+	return err
+}
+
+func (s *LocalFileSender) WritePartWithContext(ctx context.Context, input io.ReadSeeker, pn int64) (string, error) {
+	var err error
+	_, err = io.Copy(s.ptr, input)
+	return "", err
+}
+
+func (s *LocalFileSender) CancelWithContext(ctx context.Context) error {
+	err := s.ptr.Close()
+	s.ptr = nil
+	return err
+}
+
+func (s *LocalFileSender) CloseWithContext(ctx context.Context) error {
+	err := s.ptr.Close()
+	s.ptr = nil
+	return err
+}
+
 // UploaderLocalFile is mostly for testing purposes to store locally
 // whats downloaded by different schemas to verify
 type UploaderLocalFile struct {
 }
 
-func (f UploaderLocalFile) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
+func (f UploaderLocalFile) Upload(ctx context.Context, uri string, options map[string]string,
+	data chan dlData, msg chan dlMessage, s sender) {
 
 	log.Println("Prepare upload. Constructing temp folder...")
 
@@ -37,12 +76,12 @@ func (f UploaderLocalFile) Upload(ctx context.Context, uri string, options map[s
 	fileName := path.Base(uploadUrl.Path)
 	tempFilePath := filepath.Join(tempDir, fileName)
 
-	file, err := os.Create(tempFilePath)
+	err = s.OpenWithContext(context.Background(), tempFilePath)
 	if err != nil {
 		msg <- dlMessage{sender: "uploader", err: err}
 		return
 	}
-	defer file.Close()
+	defer s.CloseWithContext(context.Background())
 
 	var totalBytes uint64
 
@@ -56,17 +95,13 @@ func (f UploaderLocalFile) Upload(ctx context.Context, uri string, options map[s
 				return
 			}
 			log.Printf("Uploading %v bytes...\n", len(chunk.data))
-			bw, err := file.Write(chunk.data)
+			reader := bytes.NewReader(chunk.data)
+			_, err := s.WritePartWithContext(context.Background(), reader, 1)
 			if err != nil {
 				msg <- dlMessage{sender: "uploader", err: err}
 				return
 			}
-			if bw != len(chunk.data) {
-				incompleteOp := fmt.Errorf("file write operation error. expected to write %v bytes but got %v", len(chunk.data), bw)
-				msg <- dlMessage{sender: "uploader", err: incompleteOp}
-				return
-			}
-			totalBytes += uint64(bw)
+			totalBytes += uint64(len(chunk.data))
 		case <-ctx.Done(): // there is cancellation
 			msg <- dlMessage{sender: "uploader", err: ctx.Err()}
 			return

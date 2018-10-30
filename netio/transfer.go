@@ -19,15 +19,27 @@ func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[str
 		return fmt.Errorf("invalid dstUrl %v", err)
 	}
 
-	dnl, err := getDownloaderForScheme(src.Scheme)
+	info, err := probe(ctx, src.Scheme, srcUrl, options)
+	if err != nil {
+		return fmt.Errorf("can't collect src file info: %v", err)
+	}
+
+	dnl, err := getDownloader(src.Scheme, info.Size)
 	if err != nil {
 		return fmt.Errorf("can't initialize downloader: %v", err)
 	}
 
-	upl, err := getUploaderForScheme(dst.Scheme)
+	upl, err := getUploader(dst.Scheme)
 	if err != nil {
 		return fmt.Errorf("can't initialize uploader: %v", err)
 	}
+
+	sender, err := getSender(dst.Scheme, info.Size)
+	if err != nil {
+		return fmt.Errorf("can't initialize sender: %v", err)
+	}
+
+	sender.Init(options)
 
 	ioctx, cancel := context.WithCancel(ctx)
 
@@ -49,16 +61,18 @@ func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[str
 			}
 		}
 	}()
-	defer close(commchan) // to finish helper goroutine in case close() is not called
 
 	wg.Add(1)
 	go download(&wg, dnl, ioctx, srcUrl, options, datachan, commchan)
 
 	wg.Add(1)
-	go upload(&wg, upl, ioctx, dstUrl, options, datachan, commchan)
+	go upload(&wg, upl, ioctx, dstUrl, options, datachan, commchan, sender)
 
 	// wait until transfer complete or error
 	wg.Wait()
+
+	// to finish helper goroutine
+	close(commchan)
 
 	return transferError
 }
@@ -66,13 +80,22 @@ func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[str
 func download(wg *sync.WaitGroup, dnl Downloader, ioctx context.Context, srcUrl string,
 	options map[string]string, datachan chan dlData, commchan chan dlMessage) {
 
+	defer wg.Done()
 	dnl.Download(ioctx, srcUrl, options, datachan, commchan)
-	wg.Done()
 }
 
 func upload(wg *sync.WaitGroup, upl Uploader, ioctx context.Context, dstUrl string,
-	options map[string]string, datachan chan dlData, commchan chan dlMessage) {
+	options map[string]string, datachan chan dlData, commchan chan dlMessage, s sender) {
 
-	upl.Upload(ioctx, dstUrl, options, datachan, commchan)
-	wg.Done()
+	defer wg.Done()
+	upl.Upload(ioctx, dstUrl, options, datachan, commchan, s)
+}
+
+func probe(ctx context.Context, scheme string, uri string, options map[string]string) (FileInfo, error) {
+	var info FileInfo
+	dl, err := getProbeForScheme(scheme)
+	if err != nil {
+		return info, err
+	}
+	return dl.GetFileInfo(ctx, uri, options)
 }

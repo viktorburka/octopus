@@ -18,46 +18,189 @@ import (
 	"sync"
 )
 
-type UploaderS3 struct {
+type S3SenderSimple struct {
+	m sync.Mutex
+	opt map[string]string
+	key string
+	bkt string
+	isOpen   bool
+	s3client *s3.S3
 }
 
-func (s UploaderS3) Upload(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
+//type UploaderS3Simple struct {
+//}
 
-	var bucket  string
-	var keyName string
-	var counter int64 = 1
+type S3SenderMultipart struct {
+	m   sync.Mutex
+	opt map[string]string
+	key string
+	bkt string
+	mpu      *s3.CreateMultipartUploadOutput
+	s3client *s3.S3
+	etags  []*s3.CompletedPart
+}
+
+type UploaderS3Multipart struct {
+}
+
+func (s *S3SenderMultipart) Init(opt map[string]string) {
+	s.m.Lock()
+	defer s.m.Unlock()
+	s.opt = opt
+}
+
+func (s *S3SenderMultipart) IsOpen() bool {
+	s.m.Lock()
+	defer s.m.Unlock()
+	isOpen := s.s3client != nil && s.mpu != nil
+	return isOpen
+}
+
+func (s *S3SenderMultipart) OpenWithContext(ctx context.Context, uri string) error {
 
 	uploadUrl, err := url.Parse(uri)
 	if err != nil {
-		msg <- dlMessage{sender: "uploader", err: err}
-		return
+		return err
 	}
 
-	style, ok := options["bucketNameStyle"]
+	s.m.Lock()
+	s.etags = make([]*s3.CompletedPart, 0)
+	style, ok := s.opt["bucketNameStyle"]
 	if !ok {
 		// set 'path-style' bucket name by default
 		// see https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
 		style = "path-style"
 	}
-
 	if style == "path-style" {
 		idx := strings.Index(uploadUrl.Path, "/")
-		bucket = uploadUrl.Path[:idx]
-		keyName = uploadUrl.Path[idx+1:]
+		s.bkt = uploadUrl.Path[:idx]
+		s.key = uploadUrl.Path[idx+1:]
 	} else {
 		hostname := uploadUrl.Hostname()
 		idx := strings.Index(hostname, ".")
-		bucket = hostname[:idx]
-		keyName = uploadUrl.Path[1:] // skip first '/' char
+		s.bkt = hostname[:idx]
+		s.key = uploadUrl.Path[1:] // skip first '/' char
 	}
+	s.m.Unlock()
 
 	sess, err := session.NewSession()
 	if err != nil {
-		msg <- dlMessage{sender: "uploader", err: err}
-		return
+		return err
 	}
 
-	s3client := s3.New(sess)
+	c := s3.New(sess)
+	s.m.Lock()
+	s.s3client = c
+	s.m.Unlock()
+
+	mpuInput := &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(s.bkt),
+		Key:    aws.String(s.key),
+	}
+
+	// initiate multipart upload
+	mpu, err := s.s3client.CreateMultipartUploadWithContext(ctx, mpuInput)
+	if err != nil {
+		return err
+	}
+
+	s.m.Lock()
+	s.mpu = mpu
+	s.m.Unlock()
+
+	return nil
+}
+
+func (s *S3SenderMultipart) WritePartWithContext(ctx context.Context, input io.ReadSeeker, pn int64) (string, error) {
+
+	// helper function to allocate int64 and
+	// initialize it in one function call
+	var newInt64 = func(init int64) *int64 {
+		val := new(int64)
+		*val = init
+		return val
+	}
+
+	s.m.Lock()
+	bucket := s.bkt
+	key    := s.key
+	uplid  := *s.mpu.UploadId // making sure we create a copy
+	s.m.Unlock()
+
+	result, err := s.s3client.UploadPartWithContext(ctx, &s3.UploadPartInput{
+		Body:       input,
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(key),
+		UploadId:   aws.String(uplid),
+		PartNumber: aws.Int64(pn),
+	})
+	if err != nil {
+		return "", err
+	}
+
+	s.m.Lock()
+	defer s.m.Unlock()
+	s.etags = append(s.etags, &s3.CompletedPart{ETag: result.ETag, PartNumber: newInt64(pn)})
+
+	return *result.ETag, nil
+}
+
+func (s *S3SenderMultipart) CancelWithContext(ctx context.Context) error {
+	s.m.Lock()
+	bucket := s.bkt
+	key    := s.key
+	uplid  := *s.mpu.UploadId
+	s.m.Unlock()
+	// cancel multipart upload if any
+	_, err := s.s3client.AbortMultipartUploadWithContext(ctx, &s3.AbortMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(key),
+		UploadId: aws.String(uplid),
+	})
+	if err != nil {
+		err = fmt.Errorf("mulipart upload cancelation error: %v", err)
+		return err
+	}
+
+	s.mpu      = nil
+	s.s3client = nil
+	s.etags    = nil
+
+	return nil
+}
+
+func (s *S3SenderMultipart) CloseWithContext(ctx context.Context) error {
+
+	s.m.Lock()
+	defer s.m.Unlock()
+
+	sort.Slice(s.etags, func(i, j int) bool {
+		return *s.etags[i].PartNumber < *s.etags[j].PartNumber
+	})
+
+	cmpuInput := &s3.CompleteMultipartUploadInput{
+		Bucket: aws.String(s.bkt),
+		Key:    aws.String(s.key),
+		MultipartUpload: &s3.CompletedMultipartUpload{
+			Parts: s.etags,
+		},
+		UploadId: s.mpu.UploadId,
+	}
+
+	_, err := s.s3client.CompleteMultipartUploadWithContext(ctx, cmpuInput)
+	if err != nil {
+		return err
+	}
+
+	s.mpu      = nil
+	s.s3client = nil
+	s.etags    = nil
+
+	return nil
+}
+
+func (s UploaderS3Multipart) Upload(ctx context.Context, uri string, options map[string]string,
+	data chan dlData, msg chan dlMessage, snd sender) {
 
 	tempDir, err := ioutil.TempDir(os.TempDir(), "")
 	if err != nil {
@@ -68,68 +211,36 @@ func (s UploaderS3) Upload(ctx context.Context, uri string, options map[string]s
 	opErrCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var initMultipartUpload = func() (*s3.CreateMultipartUploadOutput, error) {
-
-		mpuInput := &s3.CreateMultipartUploadInput{
-			Bucket: aws.String(bucket),
-			Key:    aws.String(keyName),
-		}
-
-		// initiate multipart upload
-		mpu, err := s3client.CreateMultipartUploadWithContext(opErrCtx, mpuInput)
-		if err != nil {
-			return nil, err
-		}
-
-		return mpu, nil
+	if err := snd.OpenWithContext(opErrCtx, uri); err != nil {
+		msg <- dlMessage{sender: "uploader", err: err}
+		return
 	}
-
-	var total int64
-	var fpath string
-	var file  *os.File
-	var mpu   *s3.CreateMultipartUploadOutput
 
 	const MaxWorkers = 5 // can't be 0 !
 
-	errchan   := make(chan error)
-	workers   := make(chan struct{}, MaxWorkers)
-	etagschan := make(chan *s3.CompletedPart)
-	etags     := make([]*s3.CompletedPart, 0)
+	errchan := make(chan error)
+	workers := make(chan struct{}, MaxWorkers)
 
-	isMultipart := false
 	isLastChunk := false
 	exitOnError := false
 
 	var wg sync.WaitGroup
 
-	var setErrorState = func(err error) {
-		cancel()
-		msg <- dlMessage{sender: "uploader", err: err}
-		exitOnError = true
-	}
-
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for {
-			select {
-			case et, ok := <-etagschan:
-				if !ok {
-					return
-				}
-				etags = append(etags, et)
-			case <-opErrCtx.Done():
-				return
-			}
+
+		var counter int64 = 1
+		var total int64
+		var fpath string
+		var file  *os.File
+
+		var setErrorState = func(err error) {
+			cancel()
+			msg <- dlMessage{sender: "uploader", err: err}
+			exitOnError = true
 		}
-	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer close(etagschan)
-
-		var wg2 sync.WaitGroup
 		for !isLastChunk || exitOnError {
 			select {
 			case chunk, ok := <-data:
@@ -157,34 +268,19 @@ func (s UploaderS3) Upload(ctx context.Context, uri string, options map[string]s
 					total += int64(bw)
 				}
 
-				readyUpload := isLastChunk
-
-				if total >= MinAwsPartSize {
-					if mpu == nil { // this the very first part - init multipart upload
-						mpu, err = initMultipartUpload() // Warning: use '=' to refer to outer scope var not ':=' !
-						if err != nil {
-							setErrorState(err)
-							break
-						}
-						isMultipart = true
-					}
-					readyUpload = true
-				}
-
-				if readyUpload {
+				if total >= MinAwsPartSize || isLastChunk { // ready to start upload
+					// close buffer file
 					if err := file.Close(); err != nil {
 						setErrorState(err)
 						break
 					}
 					file = nil
-					if isMultipart {
-						workers <- struct{}{}
-						wg2.Add(1)
-						go uploadPart(opErrCtx, s3client, fpath, bucket, keyName,
-							counter, mpu.UploadId, etagschan, errchan, &wg2, workers)
-						total = 0
-						counter += 1
-					}
+
+					workers <- struct{}{}
+					wg.Add(1)
+					go uploadPart(opErrCtx, fpath, counter, errchan, &wg, workers, snd)
+					total = 0
+					counter += 1
 				}
 
 				if isLastChunk {
@@ -200,55 +296,29 @@ func (s UploaderS3) Upload(ctx context.Context, uri string, options map[string]s
 				exitOnError = true
 			}
 		}
-		wg2.Wait()
 	}()
 
 	// make sure all goroutines are finished
 	wg.Wait()
 
 	if exitOnError {
-		// cancel multipart upload if any
-		if mpu != nil {
-			_, err := s3client.AbortMultipartUploadWithContext(ctx, &s3.AbortMultipartUploadInput{
-				Bucket:   aws.String(bucket),
-				Key:      aws.String(keyName),
-				UploadId: mpu.UploadId,
-			})
-			if err != nil {
-				err = fmt.Errorf("mulipart upload cancelation error: %v", err)
-				msg <- dlMessage{sender: "uploader", err: err}
-			}
+		if err := snd.CancelWithContext(ctx); err != nil {
+			msg <- dlMessage{sender: "uploader", err: err}
 		}
 		return
 	}
 
-	if isMultipart {
-		err = completeMultipart(opErrCtx, s3client, bucket, keyName, etags, mpu.UploadId)
-	} else {
-		err = uploadWhole(opErrCtx, s3client, fpath, bucket, keyName)
-	}
-	if err != nil {
+	if err := snd.CloseWithContext(opErrCtx); err != nil {
 		msg <- dlMessage{sender: "uploader", err: err}
 		return
 	}
-
-	msg <- dlMessage{sender: "uploader", err: nil}
 }
 
-func uploadPart(ctx context.Context, s3client *s3.S3, filePath string, bucket string, keyName string,
-	pn int64, uploadId *string, etags chan *s3.CompletedPart, errchan chan error, wg *sync.WaitGroup,
-	workers chan struct{}) {
+func uploadPart(ctx context.Context, filePath string, pn int64, errchan chan error, wg *sync.WaitGroup,
+	workers chan struct{}, snd sender) {
 
 	defer func() { <-workers }()
-
 	defer wg.Done()
-	// helper function to allocate int64 and
-	// initialize it in one function call
-	var newInt64 = func(init int64) *int64 {
-		val := new(int64)
-		*val = init
-		return val
-	}
 
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -257,15 +327,13 @@ func uploadPart(ctx context.Context, s3client *s3.S3, filePath string, bucket st
 	}
 	defer file.Close()
 
-	input := &s3.UploadPartInput{
-		Body:       file,
-		Bucket:     aws.String(bucket),
-		Key:        aws.String(keyName),
-		PartNumber: aws.Int64(pn),
-		UploadId:   uploadId,
-	}
-	result, err := s3client.UploadPartWithContext(ctx, input)
+	_, err = snd.WritePartWithContext(ctx, file, pn)
 	if err != nil {
+		errchan <- err
+		return
+	}
+
+	if err := file.Close(); err != nil {
 		errchan <- err
 		return
 	}
@@ -274,55 +342,90 @@ func uploadPart(ctx context.Context, s3client *s3.S3, filePath string, bucket st
 		errchan <- err
 		return
 	}
-
-	etags <- &s3.CompletedPart{ETag: result.ETag, PartNumber: newInt64(pn)}
 }
 
-func completeMultipart(ctx context.Context, s3client *s3.S3, bucket string,
-	keyName string, etags []*s3.CompletedPart, uploadId *string) error {
+func (s *S3SenderSimple) Init(opt map[string]string) {
+	s.m.Lock()
+	defer s.m.Unlock()
+	s.opt = opt
+}
 
-	sort.Slice(etags, func(i, j int) bool {
-		return *etags[i].PartNumber < *etags[j].PartNumber
+func (s *S3SenderSimple) IsOpen() bool {
+	s.m.Lock()
+	defer s.m.Unlock()
+	return s.isOpen
+}
+
+func (s *S3SenderSimple) OpenWithContext(ctx context.Context, uri string) error {
+	uploadUrl, err := url.Parse(uri)
+	if err != nil {
+		return err
+	}
+
+	s.m.Lock()
+	style, ok := s.opt["bucketNameStyle"]
+	if !ok {
+		// set 'path-style' bucket name by default
+		// see https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
+		style = "path-style"
+	}
+	if style == "path-style" {
+		idx := strings.Index(uploadUrl.Path, "/")
+		s.bkt = uploadUrl.Path[:idx]
+		s.key = uploadUrl.Path[idx+1:]
+	} else {
+		hostname := uploadUrl.Hostname()
+		idx := strings.Index(hostname, ".")
+		s.bkt = hostname[:idx]
+		s.key = uploadUrl.Path[1:] // skip first '/' char
+	}
+	s.m.Unlock()
+
+	sess, err := session.NewSession()
+	if err != nil {
+		return err
+	}
+
+	c := s3.New(sess)
+	s.m.Lock()
+	s.s3client = c
+	s.m.Unlock()
+
+	return nil
+}
+
+func (s *S3SenderSimple) WritePartWithContext(ctx context.Context, input io.ReadSeeker, pn int64) (string, error) {
+
+	s.m.Lock()
+	bucket := s.bkt
+	key    := s.key
+	s.m.Unlock()
+
+	result, err := s.s3client.PutObjectWithContext(ctx, &s3.PutObjectInput{
+		Body:   input,
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
 	})
-
-	cmpuInput := &s3.CompleteMultipartUploadInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(keyName),
-		MultipartUpload: &s3.CompletedMultipartUpload{
-			Parts: etags,
-		},
-		UploadId: uploadId,
-	}
-
-	_, err := s3client.CompleteMultipartUploadWithContext(ctx, cmpuInput)
 	if err != nil {
-		return err
+		return "", err
 	}
 
+	return *result.ETag, nil
+}
+
+func (s *S3SenderSimple) CancelWithContext(ctx context.Context) error {
 	return nil
 }
 
-func uploadWhole(ctx context.Context, s3client *s3.S3, filePath string, bucket string, keyName string) error {
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	input := &s3.PutObjectInput{
-		Body:   file,
-		Bucket: aws.String(bucket),
-		Key:    aws.String(keyName),
-	}
-
-	_, err = s3client.PutObjectWithContext(ctx, input)
-	if err != nil {
-		return err
-	}
-
+func (s *S3SenderSimple) CloseWithContext(ctx context.Context) error {
 	return nil
 }
+
+//func (s UploaderS3Simple) Upload(ctx context.Context, uri string, options map[string]string,
+//	data chan dlData, msg chan dlMessage, snd sender) {
+//
+//
+//}
 
 type chanReader struct {
 	ctx  context.Context

@@ -12,6 +12,21 @@ import (
 type DownloaderHttp struct {
 }
 
+func (h DownloaderHttp) GetFileInfo(ctx context.Context, uri string, options map[string]string) (FileInfo, error) {
+	var info FileInfo
+	client := &http.Client{} //TODO: might also instantiate it once
+	req, err := http.NewRequest("HEAD", uri, nil)
+	if err != nil {
+		return info, err
+	}
+	resp, err := client.Do(req.WithContext(ctx))
+	if err != nil {
+		return info, err
+	}
+	info.Size = resp.ContentLength
+	return info, nil
+}
+
 func (h DownloaderHttp) Download(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage) {
 	// start download
 	client := &http.Client{} //TODO: might also instantiate it once

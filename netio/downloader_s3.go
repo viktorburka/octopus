@@ -20,6 +20,54 @@ import (
 type DownloaderS3 struct {
 }
 
+func (s DownloaderS3) GetFileInfo(ctx context.Context, uri string, options map[string]string) (FileInfo, error) {
+
+	var info FileInfo
+	var bucket string
+	var keyName string
+
+	downloadUrl, err := url.Parse(uri)
+	if err != nil {
+		return info, err
+	}
+
+	style, ok := options["bucketNameStyle"]
+	if !ok {
+		// set 'path-style' bucket name by default
+		// see https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
+		style = "path-style"
+	}
+
+	if style == "path-style" {
+		idx := strings.Index(downloadUrl.Path, "/")
+		bucket = downloadUrl.Path[:idx]
+		keyName = downloadUrl.Path[idx+1:]
+	} else {
+		hostname := downloadUrl.Hostname()
+		idx := strings.Index(hostname, ".")
+		bucket = hostname[:idx]
+		keyName = downloadUrl.Path[1:] // skip first '/' char
+	}
+
+	sess, err := session.NewSession()
+	if err != nil {
+		return info, err
+	}
+
+	s3client := s3.New(sess)
+	hr, err := s3client.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(keyName),
+	})
+	if err != nil {
+		return info, err
+	}
+
+	info.Size = *hr.ContentLength
+
+	return info, nil
+}
+
 func (s DownloaderS3) Download(ctx context.Context, uri string,
 	options map[string]string, data chan dlData, msg chan dlMessage) {
 

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -108,7 +109,8 @@ func (s *S3SenderMultipart) OpenWithContext(ctx context.Context, uri string) err
 	return nil
 }
 
-func (s *S3SenderMultipart) WritePartWithContext(ctx context.Context, input io.ReadSeeker, pn int64) (string, error) {
+func (s *S3SenderMultipart) WritePartWithContext(ctx context.Context, input io.ReadSeeker,
+	opt map[string]string) (string, error) {
 
 	// helper function to allocate int64 and
 	// initialize it in one function call
@@ -116,6 +118,11 @@ func (s *S3SenderMultipart) WritePartWithContext(ctx context.Context, input io.R
 		val := new(int64)
 		*val = init
 		return val
+	}
+
+	pn, err := strconv.ParseInt(opt["partNumber"], 10, 64)
+	if err != nil {
+		return "", err
 	}
 
 	s.m.Lock()
@@ -324,7 +331,11 @@ func uploadPart(ctx context.Context, filePath string, pn int64, errchan chan err
 	}
 	defer file.Close()
 
-	_, err = snd.WritePartWithContext(ctx, file, pn)
+	opt := map[string]string {
+		"partNumber": strconv.FormatInt(pn, 10),
+	}
+
+	_, err = snd.WritePartWithContext(ctx, file, opt)
 	if err != nil {
 		errchan <- err
 		return
@@ -392,7 +403,8 @@ func (s *S3SenderSimple) OpenWithContext(ctx context.Context, uri string) error 
 	return nil
 }
 
-func (s *S3SenderSimple) WritePartWithContext(ctx context.Context, input io.ReadSeeker, pn int64) (string, error) {
+func (s *S3SenderSimple) WritePartWithContext(ctx context.Context, input io.ReadSeeker,
+	opt map[string]string) (string, error) {
 
 	s.m.Lock()
 	bucket := s.bkt

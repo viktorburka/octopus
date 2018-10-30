@@ -31,7 +31,9 @@ func (s *LocalFileSender) OpenWithContext(ctx context.Context, uri string) error
 	return err
 }
 
-func (s *LocalFileSender) WritePartWithContext(ctx context.Context, input io.ReadSeeker, pn int64) (string, error) {
+func (s *LocalFileSender) WritePartWithContext(ctx context.Context, input io.ReadSeeker,
+	opt map[string]string) (string, error) {
+
 	var err error
 	_, err = io.Copy(s.ptr, input)
 	return "", err
@@ -96,7 +98,7 @@ func (f UploaderLocalFile) Upload(ctx context.Context, uri string, options map[s
 			}
 			log.Printf("Uploading %v bytes...\n", len(chunk.data))
 			reader := bytes.NewReader(chunk.data)
-			_, err := s.WritePartWithContext(context.Background(), reader, 1)
+			_, err := s.WritePartWithContext(context.Background(), reader, map[string]string{})
 			if err != nil {
 				msg <- dlMessage{sender: "uploader", err: err}
 				return

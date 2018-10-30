@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
 	"sync"
 )
 
@@ -24,7 +25,7 @@ func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[str
 		return fmt.Errorf("can't collect src file info: %v", err)
 	}
 
-	dnl, err := getDownloader(src.Scheme, info.Size)
+	dnl, err := getDownloader(src.Scheme)
 	if err != nil {
 		return fmt.Errorf("can't initialize downloader: %v", err)
 	}
@@ -34,10 +35,17 @@ func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[str
 		return fmt.Errorf("can't initialize uploader: %v", err)
 	}
 
+	receiver, err := getReceiver(src.Scheme, info.Size)
+	if err != nil {
+		return fmt.Errorf("can't initialize receiver: %v", err)
+	}
+
 	sender, err := getSender(dst.Scheme, info.Size)
 	if err != nil {
 		return fmt.Errorf("can't initialize sender: %v", err)
 	}
+
+	options["contentLength"] = strconv.FormatInt(info.Size, 10)
 
 	sender.Init(options)
 
@@ -63,7 +71,7 @@ func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[str
 	}()
 
 	wg.Add(1)
-	go download(&wg, dnl, ioctx, srcUrl, options, datachan, commchan)
+	go download(&wg, dnl, ioctx, srcUrl, options, datachan, commchan, receiver)
 
 	wg.Add(1)
 	go upload(&wg, upl, ioctx, dstUrl, options, datachan, commchan, sender)
@@ -78,10 +86,10 @@ func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[str
 }
 
 func download(wg *sync.WaitGroup, dnl Downloader, ioctx context.Context, srcUrl string,
-	options map[string]string, datachan chan dlData, commchan chan dlMessage) {
+	options map[string]string, datachan chan dlData, commchan chan dlMessage, rc receiver) {
 
 	defer wg.Done()
-	dnl.Download(ioctx, srcUrl, options, datachan, commchan)
+	dnl.Download(ioctx, srcUrl, options, datachan, commchan, rc)
 }
 
 func upload(wg *sync.WaitGroup, upl Uploader, ioctx context.Context, dstUrl string,

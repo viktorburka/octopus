@@ -9,15 +9,143 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
 
 type DownloaderS3 struct {
+}
+
+type S3ReceiverMultipart struct {
+	m sync.Mutex
+	bkt string
+	key string
+	s3client *s3.S3
+
+}
+
+
+func (r *S3ReceiverMultipart) OpenWithContext(ctx context.Context, uri string, opt map[string]string) error {
+
+	downloadUrl, err := url.Parse(uri)
+	if err != nil {
+		return err
+	}
+
+	r.m.Lock()
+	style, ok := opt["bucketNameStyle"]
+	if !ok {
+		// set 'path-style' bucket name by default
+		// see https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
+		style = "path-style"
+	}
+	if style == "path-style" {
+		idx := strings.Index(downloadUrl.Path, "/")
+		r.bkt = downloadUrl.Path[:idx]
+		r.key = downloadUrl.Path[idx+1:]
+	} else {
+		hostname := downloadUrl.Hostname()
+		idx := strings.Index(hostname, ".")
+		r.bkt = hostname[:idx]
+		r.key = downloadUrl.Path[1:] // skip first '/' char
+	}
+	r.m.Unlock()
+
+	sess, err := session.NewSession()
+	if err != nil {
+		return err
+	}
+
+	c := s3.New(sess)
+	r.m.Lock()
+	r.s3client = c
+	r.m.Unlock()
+
+	return nil
+}
+
+func (r *S3ReceiverMultipart) IsOpen() bool {
+	r.m.Lock()
+	defer r.m.Unlock()
+	isOpen := r.s3client != nil
+	return isOpen
+}
+
+func (r *S3ReceiverMultipart) ReadPartWithContext(ctx context.Context, output io.WriteSeeker,
+	opt map[string]string) (string, error) {
+
+	partSize, err := strconv.ParseInt(opt["partSize"], 10, 64)
+	if err != nil {
+		return "", err
+	}
+
+	rangeStart := opt["rangeStart"]
+	rangeEnd   := opt["rangeEnd"]
+	rg         := fmt.Sprintf("bytes=%v-%v", rangeStart, rangeEnd)
+
+	r.m.Lock()
+	bucket := r.bkt
+	key    := r.key
+	r.m.Unlock()
+
+	result, err := r.s3client.GetObjectWithContext(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Range:  aws.String(rg),
+	})
+	if err != nil {
+		return "", err
+	}
+	defer result.Body.Close()
+
+	bsaved := int64(0)
+	buffer := make([]byte, partSize)
+
+	for {
+		br, err := result.Body.Read(buffer)
+		if err != nil && err != io.EOF { // its an error (io.EOF is fine)
+			return "", err
+		}
+		// Looks like there might be a bug in AWS SDK when executing ranged request
+		// It is supposed to return io.EOF but instead returns nil and 0 bytes
+		// Therefore put this condition as temporary solution
+		if br == 0 {
+			break
+		}
+		bw, err := output.Write(buffer[:br])
+		if err != nil {
+			return "", err
+		}
+		bsaved += int64(bw)
+		if err == io.EOF { // done reading
+			break
+		}
+	}
+
+	// making sure all bytes have been read
+	if bsaved != *result.ContentLength {
+		return "", fmt.Errorf("incomplete read operation. extected %v but received %v",
+			bsaved, *result.ContentLength)
+	}
+
+	// done reading - close response body
+	if err := result.Body.Close(); err != nil {
+		return "", err
+	}
+
+	return *result.ETag, nil
+}
+
+func (r *S3ReceiverMultipart) CancelWithContext(ctx context.Context) error {
+	return fmt.Errorf("not impelmented")
+}
+
+func (r *S3ReceiverMultipart) CloseWithContext(ctx context.Context) error {
+	return fmt.Errorf("not impelmented")
 }
 
 func (s DownloaderS3) GetFileInfo(ctx context.Context, uri string, options map[string]string) (FileInfo, error) {
@@ -69,69 +197,25 @@ func (s DownloaderS3) GetFileInfo(ctx context.Context, uri string, options map[s
 }
 
 func (s DownloaderS3) Download(ctx context.Context, uri string,
-	options map[string]string, data chan dlData, msg chan dlMessage) {
+	options map[string]string, data chan dlData, msg chan dlMessage, rc receiver) {
 
-	var bucket string
-	var keyName string
-
-	downloadUrl, err := url.Parse(uri)
+	contentLength, err := strconv.ParseInt(options["contentLength"], 10, 64)
 	if err != nil {
 		msg <- dlMessage{sender: "downloader", err: err}
 		return
 	}
 
-	style, ok := options["bucketNameStyle"]
-	if !ok {
-		// set 'path-style' bucket name by default
-		// see https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
-		style = "path-style"
-	}
-
-	if style == "path-style" {
-		idx := strings.Index(downloadUrl.Path, "/")
-		bucket = downloadUrl.Path[:idx]
-		keyName = downloadUrl.Path[idx+1:]
-	} else {
-		hostname := downloadUrl.Hostname()
-		idx := strings.Index(hostname, ".")
-		bucket = hostname[:idx]
-		keyName = downloadUrl.Path[1:] // skip first '/' char
-	}
-
-	sess, err := session.NewSession()
-	if err != nil {
+	if err := rc.OpenWithContext(ctx, uri, options); err != nil {
 		msg <- dlMessage{sender: "downloader", err: err}
 		return
 	}
-
-	s3client := s3.New(sess)
-
-	opErrCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	hr, err := s3client.HeadObjectWithContext(opErrCtx, &s3.HeadObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(keyName),
-	})
-	if err != nil {
-		msg <- dlMessage{sender: "downloader", err: err}
-		return
-	}
-
-	if *hr.ContentLength >= MinAwsPartSize {
-		rangedDownload(ctx, s3client, bucket, keyName, data, msg, MinAwsPartSize, *hr.ContentLength)
-	} else {
-		singleDownload(ctx, s3client, bucket, keyName, data, msg, *hr.ContentLength)
-	}
-}
-
-func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key string, data chan dlData,
-	msg chan dlMessage, partSize int64, contentLength int64) {
 
 	var last = func(val int64) int64 {
 		if val > 0 { return 1 }
 		return 0
 	}
+
+	partSize := int64(MinAwsPartSize)
 
 	if contentLength < partSize {
 		err := fmt.Errorf("can't start ranged download: contentLength < partSize")
@@ -180,20 +264,6 @@ func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key str
 				defer wg2.Done()
 				defer func() {<-workers}()
 
-				rg    := fmt.Sprintf("bytes=%v-%v", rangeStart, rangeEnd)
-				input := &s3.GetObjectInput{
-					Bucket: aws.String(bucket),
-					Key:    aws.String(key),
-					Range:  aws.String(rg),
-				}
-
-				result, err := s3client.GetObjectWithContext(opErrCtx, input)
-				if err != nil {
-					msg <- dlMessage{sender: "downloader", err: err}
-					return
-				}
-				defer result.Body.Close()
-
 				fileName := fmt.Sprintf("%v.part", curPart)
 				filePath := filepath.Join(tempDir, fileName)
 
@@ -204,46 +274,20 @@ func rangedDownload(ctx context.Context, s3client *s3.S3, bucket string, key str
 				}
 				defer file.Close()
 
-				bsaved := int64(0)
-				buffer := make([]byte, partSize)
-
-				for {
-					br, err := result.Body.Read(buffer)
-					if err != nil && err != io.EOF { // its an error (io.EOF is fine)
-						msg <- dlMessage{sender: "downloader", err: err}
-						return
-					}
-					// Looks like there might be a bug in AWS SDK when executing ranged request
-					// It is supposed to return io.EOF but instead returns nil and 0 bytes
-					// Therefore put this condition as temporary solution
-					if br == 0 {
-						break
-					}
-					bw, err := file.Write(buffer[:br])
-					if err != nil {
-						msg <- dlMessage{sender: "downloader", err: err}
-						return
-					}
-					bsaved += int64(bw)
-					if err == io.EOF { // done reading
-						break
-					}
+				opt := map[string]string {
+					"rangeStart": strconv.FormatInt(rangeStart,10),
+					"rangeEnd":   strconv.FormatInt(rangeEnd,10),
+					"partSize":   strconv.FormatInt(partSize,10),
 				}
 
-				// making sure all bytes have been read
-				if bsaved != *result.ContentLength {
-					msg <- dlMessage{sender: "downloader", err: fmt.Errorf("incomplete write operation")}
+				_, err = rc.ReadPartWithContext(opErrCtx, file, opt)
+				if err != nil {
+					msg <- dlMessage{sender: "downloader", err: err}
 					return
 				}
 
 				// done writing - close file
 				if err := file.Close(); err != nil {
-					msg <- dlMessage{sender: "downloader", err: err}
-					return
-				}
-
-				// done reading - close response body
-				if err := result.Body.Close(); err != nil {
 					msg <- dlMessage{sender: "downloader", err: err}
 					return
 				}
@@ -338,43 +382,4 @@ func writePart(ctx context.Context, filePath string, totalSent int64, totalSize 
 	}
 
 	return totalBytesRead, nil
-}
-
-func singleDownload(ctx context.Context, s3client *s3.S3, bucket string, key string, data chan dlData,
-	msg chan dlMessage, contentLength int64) {
-
-	input := &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-	}
-
-	result, err := s3client.GetObjectWithContext(ctx, input)
-	if err != nil {
-		msg <- dlMessage{sender: "downloader", err: err}
-		return
-	}
-	defer result.Body.Close()
-
-	var totalBytesRead int64
-
-	// read data
-	reader := bufio.NewReader(result.Body)
-	buffer := make([]byte, MinAwsPartSize)
-	for {
-		br, err := reader.Read(buffer)
-		if err != nil && err != io.EOF { // its an error (io.EOF is fine)
-			msg <- dlMessage{sender: "downloader", err: err}
-			return
-		}
-		totalBytesRead += int64(br)
-		log.Printf("downloader: received %v bytes\n", totalBytesRead)
-		data <- dlData{data: buffer[:br], br: totalBytesRead, total: contentLength}
-		if err == io.EOF { // done reading
-			close(data)
-			break
-		}
-	}
-
-	log.Println("download finished. total size:", totalBytesRead)
-	msg <- dlMessage{sender: "downloader", err: nil}
 }

@@ -23,6 +23,7 @@ func (s UploaderConcurrent) Upload(ctx context.Context, uri string, options map[
 		msg <- dlMessage{sender: "uploader", err: err}
 		return
 	}
+	defer os.RemoveAll(tempDir)
 
 	opErrCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -126,6 +127,11 @@ func (s UploaderConcurrent) Upload(ctx context.Context, uri string, options map[
 	}
 
 	if err := snd.CloseWithContext(opErrCtx); err != nil {
+		msg <- dlMessage{sender: "uploader", err: err}
+		return
+	}
+
+	if err := os.RemoveAll(tempDir); err != nil {
 		msg <- dlMessage{sender: "uploader", err: err}
 		return
 	}

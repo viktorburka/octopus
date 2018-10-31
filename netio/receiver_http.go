@@ -7,9 +7,16 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
 )
 
-func (r *HttpReceiverSimple) OpenWithContext(ctx context.Context, uri string, opt map[string]string) error {
+type HttpReceiver struct {
+	m sync.Mutex
+	uri string
+	client *http.Client
+}
+
+func (r *HttpReceiver) OpenWithContext(ctx context.Context, uri string, opt map[string]string) error {
 	r.m.Lock()
 	defer r.m.Unlock()
 	r.uri    = uri
@@ -17,13 +24,13 @@ func (r *HttpReceiverSimple) OpenWithContext(ctx context.Context, uri string, op
 	return nil
 }
 
-func (r *HttpReceiverSimple) IsOpen() bool {
+func (r *HttpReceiver) IsOpen() bool {
 	r.m.Lock()
 	defer r.m.Unlock()
 	return r.client != nil
 }
 
-func (r *HttpReceiverSimple) ReadPartWithContext(ctx context.Context, output io.WriteSeeker,
+func (r *HttpReceiver) ReadPartWithContext(ctx context.Context, output io.WriteSeeker,
 	opt map[string]string) (string, error) {
 
 	r.m.Lock()
@@ -68,15 +75,15 @@ func (r *HttpReceiverSimple) ReadPartWithContext(ctx context.Context, output io.
 	return "", nil
 }
 
-func (r *HttpReceiverSimple) CancelWithContext(ctx context.Context) error {
+func (r *HttpReceiver) CancelWithContext(ctx context.Context) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (r *HttpReceiverSimple) CloseWithContext(ctx context.Context) error {
+func (r *HttpReceiver) CloseWithContext(ctx context.Context) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (r *HttpReceiverSimple) GetFileInfo(ctx context.Context, uri string, options map[string]string) (FileInfo, error) {
+func (r *HttpReceiver) GetFileInfo(ctx context.Context, uri string, options map[string]string) (FileInfo, error) {
 	var info FileInfo
 	client := &http.Client{} //TODO: might also instantiate it once
 	req, err := http.NewRequest("HEAD", uri, nil)

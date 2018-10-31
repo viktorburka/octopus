@@ -119,8 +119,8 @@ func (s *S3SenderMultipart) WritePartWithContext(ctx context.Context, input io.R
 	}
 
 	s.m.Lock()
-	defer s.m.Unlock()
 	s.etags = append(s.etags, &s3.CompletedPart{ETag: result.ETag, PartNumber: newInt64(pn)})
+	s.m.Unlock()
 
 	return *result.ETag, nil
 }
@@ -142,9 +142,11 @@ func (s *S3SenderMultipart) CancelWithContext(ctx context.Context) error {
 		return err
 	}
 
+	s.m.Lock()
 	s.mpu      = nil
 	s.s3client = nil
 	s.etags    = nil
+	s.m.Unlock()
 
 	return nil
 }

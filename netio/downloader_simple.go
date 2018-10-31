@@ -3,27 +3,13 @@ package netio
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strconv"
-	"sync"
 )
 
-type DownloaderHttp struct {
+type DownloaderSimple struct {
 }
 
-type HttpReceiverSimple struct {
-	m sync.Mutex
-	uri string
-	client *http.Client
-}
-
-type chanWriter struct {
-	data chan dlData
-	total int64
-	totalBytesRead int64
-}
-
-func (h DownloaderHttp) Download(ctx context.Context, uri string, options map[string]string,
+func (h DownloaderSimple) Download(ctx context.Context, uri string, options map[string]string,
 	data chan dlData, msg chan dlMessage, rc receiver) {
 
 	if err := rc.OpenWithContext(ctx, uri, options); err != nil {
@@ -48,6 +34,13 @@ func (h DownloaderHttp) Download(ctx context.Context, uri string, options map[st
 	close(data)
 
 	msg<-dlMessage{sender:"downloader", err: nil}
+}
+
+
+type chanWriter struct {
+	data chan dlData
+	total int64
+	totalBytesRead int64
 }
 
 func newChanWriter(contentLength int64, data chan dlData) *chanWriter {

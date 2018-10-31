@@ -19,15 +19,11 @@ type UploaderSimple struct {
 func (f UploaderSimple) Upload(ctx context.Context, uri string, options map[string]string,
 	data chan dlData, msg chan dlMessage, s sender) {
 
-	log.Println("Prepare upload. Constructing temp folder...")
-
 	tempDir, err := ioutil.TempDir(os.TempDir(), "")
 	if err != nil {
 		msg <- dlMessage{sender: "uploader", err: err}
 		return
 	}
-
-	log.Println("temp dir:", tempDir)
 
 	uploadUrl, err := url.Parse(uri)
 	if err != nil {
@@ -47,16 +43,13 @@ func (f UploaderSimple) Upload(ctx context.Context, uri string, options map[stri
 
 	var totalBytes uint64
 
-	log.Println("Start upload")
 	for {
 		select {
 		case chunk, ok := <-data:
 			if !ok { // channel closed
 				log.Println("Upload finished. Total size:", totalBytes)
-				msg <- dlMessage{sender: "uploader", err: nil}
 				return
 			}
-			log.Printf("Uploading %v bytes...\n", len(chunk.data))
 			reader := bytes.NewReader(chunk.data)
 			_, err := s.WritePartWithContext(context.Background(), reader, map[string]string{})
 			if err != nil {
@@ -65,7 +58,6 @@ func (f UploaderSimple) Upload(ctx context.Context, uri string, options map[stri
 			}
 			totalBytes += uint64(len(chunk.data))
 		case <-ctx.Done(): // there is cancellation
-			msg <- dlMessage{sender: "uploader", err: ctx.Err()}
 			return
 		}
 	}

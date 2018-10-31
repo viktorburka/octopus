@@ -86,9 +86,17 @@ func (s *S3SenderSimple) WritePartWithContext(ctx context.Context, input io.Read
 }
 
 func (s *S3SenderSimple) CancelWithContext(ctx context.Context) error {
+	s.m.Lock()
+	defer s.m.Unlock()
+	s.isOpen   = false
+	s.s3client = nil
 	return nil
 }
 
 func (s *S3SenderSimple) CloseWithContext(ctx context.Context) error {
+	s.m.Lock()
+	defer s.m.Unlock()
+	s.isOpen   = false
+	s.s3client = nil
 	return nil
 }

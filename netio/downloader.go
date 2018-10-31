@@ -44,7 +44,7 @@ func getDownloader(scheme string) (dl Downloader, err error) {
 	case "http":
 		fallthrough
 	case "https":
-		return DownloaderHttp{}, nil
+		return DownloaderSimple{}, nil
 	case "s3":
 		return DownloaderConcurrent{}, nil
 	default:
@@ -57,7 +57,7 @@ func getReceiver(scheme string, size int64) (receiver, error) {
 	case "http":
 		fallthrough
 	case "https":
-		return &HttpReceiverSimple{}, nil
+		return &HttpReceiver{}, nil
 	case "s3":
 		return &S3ReceiverRanged{}, nil
 	default:

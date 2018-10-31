@@ -208,6 +208,8 @@ func (s UploaderS3Multipart) Upload(ctx context.Context, uri string, options map
 	opErrCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	log.Println("open upload connection")
+
 	if err := snd.OpenWithContext(opErrCtx, uri, options); err != nil {
 		msg <- dlMessage{sender: "uploader", err: err}
 		return
@@ -219,7 +221,7 @@ func (s UploaderS3Multipart) Upload(ctx context.Context, uri string, options map
 	workers := make(chan struct{}, MaxWorkers)
 
 	isLastChunk := false
-	exitOnError := false
+	operationError := false
 
 	var wg sync.WaitGroup
 
@@ -235,10 +237,10 @@ func (s UploaderS3Multipart) Upload(ctx context.Context, uri string, options map
 		var setErrorState = func(err error) {
 			cancel()
 			msg <- dlMessage{sender: "uploader", err: err}
-			exitOnError = true
+			operationError = false
 		}
 
-		for !isLastChunk || exitOnError {
+		for !isLastChunk && !operationError {
 			select {
 			case chunk, ok := <-data:
 
@@ -289,8 +291,7 @@ func (s UploaderS3Multipart) Upload(ctx context.Context, uri string, options map
 				msg <- dlMessage{sender: "uploader", err: err}
 
 			case <-opErrCtx.Done(): // there is cancellation
-				msg <- dlMessage{sender: "uploader", err: ctx.Err()}
-				exitOnError = true
+				operationError = true
 			}
 		}
 	}()
@@ -298,7 +299,7 @@ func (s UploaderS3Multipart) Upload(ctx context.Context, uri string, options map
 	// make sure all goroutines are finished
 	wg.Wait()
 
-	if exitOnError {
+	if operationError {
 		if err := snd.CancelWithContext(ctx); err != nil {
 			msg <- dlMessage{sender: "uploader", err: err}
 		}
@@ -317,6 +318,8 @@ func uploadPart(ctx context.Context, filePath string, pn int64, errchan chan err
 	defer func() { <-workers }()
 	defer wg.Done()
 
+	log.Println("start uploading part", pn)
+
 	file, err := os.Open(filePath)
 	if err != nil {
 		errchan <- err
@@ -333,6 +336,8 @@ func uploadPart(ctx context.Context, filePath string, pn int64, errchan chan err
 		errchan <- err
 		return
 	}
+
+	log.Println("finished uploading part", pn)
 
 	if err := file.Close(); err != nil {
 		errchan <- err
@@ -398,6 +403,7 @@ func (s *S3SenderSimple) WritePartWithContext(ctx context.Context, input io.Read
 	key    := s.key
 	s.m.Unlock()
 
+	log.Println("sending single chunk of data to S3 via PutObjectWithContext")
 	result, err := s.s3client.PutObjectWithContext(ctx, &s3.PutObjectInput{
 		Body:   input,
 		Bucket: aws.String(bucket),

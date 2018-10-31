@@ -63,7 +63,6 @@ func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[str
 			if msg.err != nil {
 				transferError = msg.err
 				cancel()
-				break
 			}
 		}
 	}()

@@ -9,12 +9,14 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type DownloaderS3 struct {
@@ -25,7 +27,6 @@ type S3ReceiverMultipart struct {
 	bkt string
 	key string
 	s3client *s3.S3
-
 }
 
 
@@ -92,6 +93,7 @@ func (r *S3ReceiverMultipart) ReadPartWithContext(ctx context.Context, output io
 	key    := r.key
 	r.m.Unlock()
 
+	log.Printf("GetObjectWithContext for range '%v'\n", rg)
 	result, err := r.s3client.GetObjectWithContext(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -104,6 +106,8 @@ func (r *S3ReceiverMultipart) ReadPartWithContext(ctx context.Context, output io
 
 	bsaved := int64(0)
 	buffer := make([]byte, partSize)
+
+	now := time.Now().UTC()
 
 	for {
 		br, err := result.Body.Read(buffer)
@@ -124,7 +128,15 @@ func (r *S3ReceiverMultipart) ReadPartWithContext(ctx context.Context, output io
 		if err == io.EOF { // done reading
 			break
 		}
+		// print bytes downloaded every second
+		// to do not clutter the log file
+		if time.Since(now) > 1 * time.Second {
+			now = time.Now().UTC()
+			log.Printf("downloaded %v bytes\n", bsaved)
+		}
 	}
+
+	log.Printf("downloaded %v bytes\n", bsaved)
 
 	// making sure all bytes have been read
 	if bsaved != *result.ContentLength {
@@ -199,11 +211,19 @@ func (r *S3ReceiverMultipart) GetFileInfo(ctx context.Context, uri string, optio
 func (s DownloaderS3) Download(ctx context.Context, uri string,
 	options map[string]string, data chan dlData, msg chan dlMessage, rc receiver) {
 
+	// helper min function that takes integer (Math.Min takes float)
+	var min = func(v1 int64, v2 int64) int64 {
+		if v1 <= v2 { return v1 }
+		return v2
+	}
+
 	contentLength, err := strconv.ParseInt(options["contentLength"], 10, 64)
 	if err != nil {
 		msg <- dlMessage{sender: "downloader", err: err}
 		return
 	}
+
+	log.Println("open download connection")
 
 	if err := rc.OpenWithContext(ctx, uri, options); err != nil {
 		msg <- dlMessage{sender: "downloader", err: err}
@@ -215,7 +235,9 @@ func (s DownloaderS3) Download(ctx context.Context, uri string,
 		return 0
 	}
 
-	partSize := int64(MinAwsPartSize)
+	// if contentLength is less than MinAwsPartSize,
+	// to properly calculate parts count use min function
+	partSize := min(int64(MinAwsPartSize), contentLength)
 
 	if contentLength < partSize {
 		err := fmt.Errorf("can't start ranged download: contentLength < partSize")
@@ -241,6 +263,8 @@ func (s DownloaderS3) Download(ctx context.Context, uri string,
 
 	partsCount := contentLength/partSize+last(contentLength%partSize)
 
+	log.Println("total download parts count:", partsCount)
+
 	// this func retrieves the object from S3 in parts
 	wg.Add(1)
 	go func() {
@@ -248,11 +272,6 @@ func (s DownloaderS3) Download(ctx context.Context, uri string,
 		defer close(partschan)
 
 		var wg2 sync.WaitGroup
-		// helper min function that takes integer (Math.Min takes float)
-		var min = func(v1 int64, v2 int64) int64 {
-			if v1 <= v2 { return v1 }
-			return v2
-		}
 
 		for partNumber := int64(0); partNumber < partsCount; partNumber++ {
 			start := partNumber*partSize
@@ -264,8 +283,12 @@ func (s DownloaderS3) Download(ctx context.Context, uri string,
 				defer wg2.Done()
 				defer func() {<-workers}()
 
+				log.Println("start download part", curPart+1, "of", partsCount)
+
 				fileName := fmt.Sprintf("%v.part", curPart)
 				filePath := filepath.Join(tempDir, fileName)
+
+				log.Println("open buffer file", fileName)
 
 				file, err := os.Create(filePath)
 				if err != nil {
@@ -280,6 +303,8 @@ func (s DownloaderS3) Download(ctx context.Context, uri string,
 					"partSize":   strconv.FormatInt(partSize,10),
 				}
 
+				log.Printf("start range download %v-%v\n", opt["rangeStart"], opt["rangeEnd"])
+
 				_, err = rc.ReadPartWithContext(opErrCtx, file, opt)
 				if err != nil {
 					msg <- dlMessage{sender: "downloader", err: err}
@@ -291,6 +316,8 @@ func (s DownloaderS3) Download(ctx context.Context, uri string,
 					msg <- dlMessage{sender: "downloader", err: err}
 					return
 				}
+
+				log.Printf("part %v download finished. passing to uploader\n", curPart+1)
 
 				partschan <- int(curPart)
 
@@ -327,6 +354,7 @@ func (s DownloaderS3) Download(ctx context.Context, uri string,
 					fileName := fmt.Sprintf("%v.part", ptr)
 					filePath := filepath.Join(tempDir, fileName)
 
+					log.Println("sending part", ptr+1, "to uploader")
 					bw, err := writePart(opErrCtx, filePath, sent, contentLength, data)
 					if err != nil {
 						msg <- dlMessage{sender: "downloader", err: err}
@@ -372,6 +400,7 @@ func writePart(ctx context.Context, filePath string, totalSent int64, totalSize 
 		totalBytesSent += int64(br)
 		select {
 		case data <- dlData{data: buffer[:br], br: totalBytesSent, total: totalSize}:
+			log.Println("sent", totalBytesSent, "bytes to uploader")
 			break
 		case <-ctx.Done():
 			return -1, ctx.Err()

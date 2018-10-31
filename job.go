@@ -105,9 +105,9 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
 
     if err := netio.Transfer(ctx, newJob.srcUrl, newJob.dstUrl, opt); err != nil {
         transErr = fmt.Errorf("can't perform transfer: %v", err)
-        //status = failed
         update["status"] = failed
         update["error"]  = transErr.Error()
+        log.Println(transErr)
     }
 
     // setup db op timeout again

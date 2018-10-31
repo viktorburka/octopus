@@ -24,9 +24,9 @@ const MinAwsPartSize = 5 * 1024 * 1024 // 5MB
 func getUploader(scheme string) (dl Uploader, err error) {
 	switch scheme {
 	case "file":
-		return UploaderLocalFile{}, nil
+		return UploaderSimple{}, nil
 	case "s3":
-		return UploaderS3Multipart{}, nil
+		return UploaderConcurrent{}, nil
 	default:
 		return nil, fmt.Errorf("upload scheme %v is not supported", scheme)
 	}

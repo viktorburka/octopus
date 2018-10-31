@@ -14,7 +14,7 @@ func TestKnownUploaderScheme(t *testing.T) {
 		t.Errorf("expected s3 uploader instance but received nil")
 		return
 	}
-	_, ok = iface.(UploaderS3Multipart)
+	_, ok = iface.(UploaderConcurrent)
 	if !ok {
 		t.Errorf("expected type UploaderS3")
 		return
@@ -25,9 +25,9 @@ func TestKnownUploaderScheme(t *testing.T) {
 		t.Errorf("expected local file uploader instance but received nil")
 		return
 	}
-	_, ok = iface.(UploaderLocalFile)
+	_, ok = iface.(UploaderSimple)
 	if !ok {
-		t.Errorf("expected type UploaderLocalFile")
+		t.Errorf("expected type UploaderSimple")
 		return
 	}
 }

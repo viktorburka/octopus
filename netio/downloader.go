@@ -46,7 +46,7 @@ func getDownloader(scheme string) (dl Downloader, err error) {
 	case "https":
 		return DownloaderHttp{}, nil
 	case "s3":
-		return DownloaderS3{}, nil
+		return DownloaderConcurrent{}, nil
 	default:
 		return nil, fmt.Errorf("download scheme %v is not supported", scheme)
 	}
@@ -59,7 +59,7 @@ func getReceiver(scheme string, size int64) (receiver, error) {
 	case "https":
 		return &HttpReceiverSimple{}, nil
 	case "s3":
-		return &S3ReceiverMultipart{}, nil
+		return &S3ReceiverRanged{}, nil
 	default:
 		return nil, fmt.Errorf("receiver scheme %v is not supported", scheme)
 	}

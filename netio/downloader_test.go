@@ -38,9 +38,9 @@ func TestKnownDownloaderScheme(t *testing.T) {
 		t.Errorf("expected s3 downloader instance but received nil")
 		return
 	}
-	_, ok = iface.(DownloaderS3)
+	_, ok = iface.(DownloaderConcurrent)
 	if !ok {
-		t.Errorf("expected type DownloaderS3")
+		t.Errorf("expected type DownloaderConcurrent")
 		return
 	}
 }

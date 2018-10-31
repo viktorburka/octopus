@@ -103,6 +103,7 @@ func (s UploaderConcurrent) Upload(ctx context.Context, uri string, options map[
 				}
 
 				if isLastChunk {
+					log.Println("last chunk is being uploaded")
 					break
 				}
 
@@ -116,25 +117,36 @@ func (s UploaderConcurrent) Upload(ctx context.Context, uri string, options map[
 		}
 	}()
 
+	log.Println("waiting for all parts upload to finish")
+
 	// make sure all goroutines are finished
 	wg.Wait()
 
+	log.Println("finished uploading all parts. operationError =", operationError)
+
 	if operationError {
+		log.Println("upload interrupted because of error. cancelling upload")
 		if err := snd.CancelWithContext(ctx); err != nil {
 			msg <- dlMessage{sender: "uploader", err: err}
 		}
 		return
 	}
 
+	log.Println("close upload connection")
+
 	if err := snd.CloseWithContext(opErrCtx); err != nil {
 		msg <- dlMessage{sender: "uploader", err: err}
 		return
 	}
 
+	log.Println("remove buffer files and folder")
+
 	if err := os.RemoveAll(tempDir); err != nil {
 		msg <- dlMessage{sender: "uploader", err: err}
 		return
 	}
+
+	log.Println("upload done")
 }
 
 func uploadPart(ctx context.Context, filePath string, pn int64, errchan chan error, wg *sync.WaitGroup,

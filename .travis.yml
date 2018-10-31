@@ -5,6 +5,10 @@ go:
 
 go_import_path: github.com/viktorburka/octopus
 
+env:
+  global:
+    secure: gfA/xSuUMX30o+tlPmpRIKzOO3iFOWbgBvglx8Pbd1GAG4AXqBwjyunkXWTjrAAQxHLhs1zZh8rBU6IrLRtuGpBSEAujUWGqAZO+vwlnMqK2Q+5kQcbMXYbolq1IlmSc8tEWyTCfw7wKaZvlSD0tXhHNGem7wI15vlsrozK2D46SNMK6iAwNW39X2KWS+BU847Rhma6+oRBAfiZr6bAkaYD4ohH1/Yq98JsCFkLuCfs4q2+6VIMBaQkZe2eCxtUB5/4UeyNmfl7kvDPyxB0wYCQ3NwR91zaQBWRmis11ATdNykA0bM3YvlIevQPIf7FPKWyZl9nQ5RnzYoPEjk+9pNdObJPoP+RH7f+4jFSXRr07q/KaifeU44CCUTuZHPC0FAp2I6VfYbR4dBZ3Pu+Jr3/nPozSawzzmLTgEo6djeu3mVYJ5EtvMC3Wd0LkjJoPNuGhOkwPOSG4h1DvPjMM2jtfdchBIKLq447D2TDm5Orv4WoXB1V96c+Yf40NH4JJKGLhiMgQERjsGXeLu2bH+6m7GGWpVDcxmyTo9k4aB+eF3U1u/lV2qGs/jovQReSp9F62tDNV6rHCk5aAQOuqE6K0oKafNBsYn3cbCoQbX26RVb4/d2Uj8I+nuusws6eOXolZBKXPtNSH3l4zi2+N7MYvAS5+jrIPBR0xq7xPjNg=
+
 install:
   - go get golang.org/x/tools/cmd/cover
   - go get github.com/mattn/goveralls
@@ -13,7 +17,3 @@ script:
   - go get -d -v ./...
   - go test -v -covermode=count -coverprofile=coverage.out ./...
   - $GOPATH/bin/goveralls -coverprofile=coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN
-
-env:
-  global:
-    secure: gfA/xSuUMX30o+tlPmpRIKzOO3iFOWbgBvglx8Pbd1GAG4AXqBwjyunkXWTjrAAQxHLhs1zZh8rBU6IrLRtuGpBSEAujUWGqAZO+vwlnMqK2Q+5kQcbMXYbolq1IlmSc8tEWyTCfw7wKaZvlSD0tXhHNGem7wI15vlsrozK2D46SNMK6iAwNW39X2KWS+BU847Rhma6+oRBAfiZr6bAkaYD4ohH1/Yq98JsCFkLuCfs4q2+6VIMBaQkZe2eCxtUB5/4UeyNmfl7kvDPyxB0wYCQ3NwR91zaQBWRmis11ATdNykA0bM3YvlIevQPIf7FPKWyZl9nQ5RnzYoPEjk+9pNdObJPoP+RH7f+4jFSXRr07q/KaifeU44CCUTuZHPC0FAp2I6VfYbR4dBZ3Pu+Jr3/nPozSawzzmLTgEo6djeu3mVYJ5EtvMC3Wd0LkjJoPNuGhOkwPOSG4h1DvPjMM2jtfdchBIKLq447D2TDm5Orv4WoXB1V96c+Yf40NH4JJKGLhiMgQERjsGXeLu2bH+6m7GGWpVDcxmyTo9k4aB+eF3U1u/lV2qGs/jovQReSp9F62tDNV6rHCk5aAQOuqE6K0oKafNBsYn3cbCoQbX26RVb4/d2Uj8I+nuusws6eOXolZBKXPtNSH3l4zi2+N7MYvAS5+jrIPBR0xq7xPjNg=

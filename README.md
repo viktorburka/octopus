@@ -1,6 +1,15 @@
 # octopus [![Build Status](https://travis-ci.com/viktorburka/octopus.svg?branch=master)](https://travis-ci.com/viktorburka/octopus)
 
-octopus is a file transfer agent written in Go that supports multiple protocols. It works by polling tasks created by octopus-server from MongoDB.
+octopus is a concurrent streaming file transfer agent written in Go that supports multiple protocols. It was written to handle large files in the fastest possible manner. Streaming means that it will start uploading concurrently with download process without a need for a whole file download to complete and it will try to perform both download and upload in multiple threads to achieve even faster transfer. It works by polling tasks created by octopus-server from MongoDB.
+
+Currently only s3 protocol supports both multi-threaded download and upload along with the streaming by leveraging such features of s3 as ranged download and multipart upload.
+
+The following protocols are currently supported:
+
+- Download: s3, http, https
+- Upload: s3, local file system
+
+local file system is for debugging purposes mostly to put downloaded file in a certain location on local file system for verification or debugging.
 
 ## Build
 

@@ -93,3 +93,13 @@ func TestUnknownReceiverScheme(t *testing.T) {
 		t.Fatal("expected nil value")
 	}
 }
+
+func TestUnknownProbeScheme(t *testing.T) {
+
+	var iface receiver
+
+	iface, _ = getProbeForScheme("unknown")
+	if iface != nil {
+		t.Fatal("expected nil value")
+	}
+}

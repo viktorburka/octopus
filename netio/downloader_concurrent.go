@@ -41,11 +41,6 @@ func (s DownloaderConcurrent) Download(ctx context.Context, uri string,
 	// to properly calculate parts count use min function
 	partSize := min(int64(MinAwsPartSize), contentLength)
 
-	if contentLength < partSize {
-		err := fmt.Errorf("can't start ranged download: contentLength < partSize")
-		return err
-	}
-
 	tempDir, err := ioutil.TempDir(os.TempDir(), "")
 	if err != nil {
 		return err

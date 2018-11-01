@@ -43,7 +43,7 @@ func TestUploadSendsError(t *testing.T) {
 
 	wg.Wait()
 
-	if uploadError != openError {
+	if uploadError.Error() != openError.Error() {
 		t.Fatalf("expected upload() to send '%v' error but got '%v'\n", openError, uploadError)
 	}
 }
@@ -84,7 +84,64 @@ func TestDownloadSendsError(t *testing.T) {
 
 	wg.Wait()
 
-	if downloadError != openError {
+	if downloadError.Error() != openError.Error() {
 		t.Fatalf("expected download() to send '%v' error but got '%v'\n", openError, downloadError)
+	}
+}
+
+func TestTransferReturnsError(t *testing.T) {
+
+	ctx := context.Background()
+	src := "s3://amazon.aws.com/src/key.mp4"
+	dst := "s3://amazon.aws.com/dst/key.mp4"
+	opt := map[string]string{}
+	err := Transfer(ctx, src, dst, opt)
+	if err == nil {
+		t.Fatalf("expected Transfer() to return an error but got nil")
+	}
+}
+
+func TestTransferInvalidParameters(t *testing.T) {
+
+	var src, dst string
+	var err error
+
+	ctx := context.Background()
+	opt := map[string]string{}
+
+	// invalid src
+	src = "s3://amazon!,aws,com/src/key.mp4"
+	dst = "s3://amazon.aws.com/dst/key.mp4"
+
+	err = Transfer(ctx, src, dst, opt)
+	if err == nil {
+		t.Fatalf("expected Transfer() to return an error but got nil")
+	}
+
+	// invalid dst
+	src = "s3://amazon.aws.com/src/key.mp4"
+	dst = "s3://amazon,!aws.com/dst/key.mp4"
+
+	err = Transfer(ctx, src, dst, opt)
+	if err == nil {
+		t.Fatalf("expected Transfer() to return an error but got nil")
+	}
+}
+
+func TestTransferUnsupportedScheme(t *testing.T) {
+
+	var src, dst string
+	var err error
+
+	ctx := context.Background()
+	opt := map[string]string{}
+
+	// invalid src
+	src = "unsupported://amazon.aws.com/src/key.mp4"
+	dst = "unsupported://amazon.aws.com/dst/key.mp4"
+
+	err = Transfer(ctx, src, dst, opt)
+	if err == nil {
+		t.Fatalf("expected Transfer() to return an error but got nil")
 	}
 }

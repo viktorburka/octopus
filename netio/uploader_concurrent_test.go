@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"testing"
+	"time"
 )
 
 func TestConcurrentUploaderConnectionInitError(t *testing.T) {
@@ -13,6 +14,10 @@ func TestConcurrentUploaderConnectionInitError(t *testing.T) {
 	uploader, err := getUploader("s3")
 	if err != nil {
 		t.Fatal(err)
+	}
+	_, ok := uploader.(UploaderConcurrent)
+	if !ok {
+		t.Fatal(fmt.Errorf("error: expected UploaderConcurrent instance"))
 	}
 
 	ctx := context.Background()
@@ -26,7 +31,7 @@ func TestConcurrentUploaderConnectionInitError(t *testing.T) {
 
 	uploadError := uploader.Upload(ctx, uri, opt, dtx, sdr)
 
-	if uploadError != sdr.openError {
+	if uploadError.Error() != sdr.openError.Error() {
 		t.Fatalf("expected Upload() to return '%v' error but got '%v'\n",
 			sdr.openError, uploadError)
 	}
@@ -37,6 +42,10 @@ func TestConcurrentUploaderHappyPath(t *testing.T) {
 	uploader, err := getUploader("s3")
 	if err != nil {
 		t.Fatal(err)
+	}
+	_, ok := uploader.(UploaderConcurrent)
+	if !ok {
+		t.Fatal(fmt.Errorf("error: expected UploaderConcurrent instance"))
 	}
 
 	ctx := context.Background()
@@ -78,10 +87,73 @@ func TestConcurrentUploaderHappyPath(t *testing.T) {
 	}
 }
 
+func TestConcurrentUploaderCancellation(t *testing.T) {
+
+	uploader, err := getUploader("s3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ok := uploader.(UploaderConcurrent)
+	if !ok {
+		t.Fatal(fmt.Errorf("error: expected UploaderConcurrent instance"))
+	}
+
+	ctx, _ := context.WithTimeout(context.Background(), 10 * time.Millisecond)
+	opt := map[string]string{}
+	uri := "s3://amazon.aws.com/bucket/key.mp4"
+	dtx := make(chan dlData)
+	sdr := &mockSender{}
+
+	uploadError := uploader.Upload(ctx, uri, opt, dtx, sdr)
+
+	if uploadError == nil {
+		t.Fatalf("expected Upload() to return '%v' error but got '%v'\n", ctx.Err(), uploadError)
+	}
+}
+
+func TestConcurrentUploaderWritePartError(t *testing.T) {
+
+	uploader, err := getUploader("s3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ok := uploader.(UploaderConcurrent)
+	if !ok {
+		t.Fatal(fmt.Errorf("error: expected UploaderConcurrent instance"))
+	}
+
+	ctx := context.Background()
+	opt := map[string]string{}
+	uri := "s3://amazon.aws.com/bucket/key.mp4"
+	dtx := make(chan dlData)
+	sdr := &mockSender{}
+
+	// data provider goroutine
+	go func() {
+		buf := make([]byte, 256*1024) // 256KB file
+		for i:=0; i<len(buf); i++ {
+			buf[i] = 0xEF
+		}
+		dtx <- dlData{buf,true,int64(len(buf)),int64(len(buf))}
+		close(dtx)
+	}()
+
+	sdr.writePartError = fmt.Errorf("write part error")
+
+	uploadError := uploader.Upload(ctx, uri, opt, dtx, sdr)
+
+	if uploadError.Error() != sdr.writePartError.Error() {
+		t.Fatalf("expected Upload() to return '%v' error but got '%v'\n", sdr.writePartError, uploadError)
+	}
+}
+
 type mockSender struct {
-	openError error
-	isOpen bool
-	buf []byte
+	openError      error
+	writePartError error
+	cancelError    error
+	closeError     error
+	isOpen         bool
+	buf            []byte
 }
 
 func (s *mockSender) OpenWithContext(ctx context.Context, uri string, opt map[string]string) error {
@@ -94,6 +166,10 @@ func (s *mockSender) IsOpen() bool {
 
 func (s *mockSender) WritePartWithContext(ctx context.Context, input io.ReadSeeker,
 	opt map[string]string) (string, error) {
+
+	if s.writePartError != nil {
+		return "", s.writePartError
+	}
 
 	size, err := input.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -121,9 +197,9 @@ func (s *mockSender) WritePartWithContext(ctx context.Context, input io.ReadSeek
 }
 
 func (s *mockSender) CancelWithContext(ctx context.Context) error {
-	return nil
+	return s.cancelError
 }
 
 func (s *mockSender) CloseWithContext(ctx context.Context) error {
-	return nil
+	return s.closeError
 }

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestConcurrentDownloadConnectionInitError(t *testing.T) {
@@ -13,6 +15,10 @@ func TestConcurrentDownloadConnectionInitError(t *testing.T) {
 	downloader, err := getDownloader("s3")
 	if err != nil {
 		t.Fatal(err)
+	}
+	_, ok := downloader.(DownloaderConcurrent)
+	if !ok {
+		t.Fatal(fmt.Errorf("error: expected DownloaderConcurrent instance"))
 	}
 
 	ctx := context.Background()
@@ -26,7 +32,7 @@ func TestConcurrentDownloadConnectionInitError(t *testing.T) {
 
 	downloadError := downloader.Download(ctx, uri, opt, dtx, sdr)
 
-	if downloadError != sdr.openError {
+	if downloadError.Error() != sdr.openError.Error() {
 		t.Fatalf("expected Download() to return '%v' error but got '%v'\n",
 			sdr.openError, downloadError)
 	}
@@ -39,6 +45,10 @@ func TestConcurrentDownloaderHappyPath(t *testing.T)  {
 	downloader, err := getDownloader("s3")
 	if err != nil {
 		t.Fatal(err)
+	}
+	_, ok := downloader.(DownloaderConcurrent)
+	if !ok {
+		t.Fatal(fmt.Errorf("error: expected DownloaderConcurrent instance"))
 	}
 
 	ctx := context.Background()
@@ -83,8 +93,118 @@ func TestConcurrentDownloaderHappyPath(t *testing.T)  {
 	}
 }
 
+func TestConcurrentDownloaderInvalidContentLength(t *testing.T)  {
+
+	downloader, err := getDownloader("s3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ok := downloader.(DownloaderConcurrent)
+	if !ok {
+		t.Fatal(fmt.Errorf("error: expected DownloaderConcurrent instance"))
+	}
+
+	ctx := context.Background()
+	opt := map[string]string{}
+	uri := "s3://amazon.aws.com/bucket/key.mp4"
+	dtx := make(chan dlData)
+	sdr := &mockReceiverRanged{}
+
+	downloadError := downloader.Download(ctx, uri, opt, dtx, sdr)
+
+	if downloadError == nil {
+		t.Fatalf("expected Download() to return invalid contentLength error but got nil\n")
+	}
+	if !strings.Contains(downloadError.Error(), "contentLength") {
+		t.Fatalf("expected Download() to return invalid contentLength error but got '%v'\n",
+			downloadError)
+	}
+}
+
+func TestConcurrentDownloaderInvalidPartSize(t *testing.T)  {
+
+	downloader, err := getDownloader("s3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ok := downloader.(DownloaderConcurrent)
+	if !ok {
+		t.Fatal(fmt.Errorf("error: expected DownloaderConcurrent instance"))
+	}
+
+	ctx := context.Background()
+	opt := map[string]string{}
+	uri := "s3://amazon.aws.com/bucket/key.mp4"
+	dtx := make(chan dlData)
+	sdr := &mockReceiverRanged{}
+
+	downloadError := downloader.Download(ctx, uri, opt, dtx, sdr)
+
+	if downloadError == nil {
+		t.Fatalf("expected Download() to return invalid contentLength error but got nil\n")
+	}
+	if !strings.Contains(downloadError.Error(), "contentLength") {
+		t.Fatalf("expected Download() to return invalid contentLength error but got '%v'\n",
+			downloadError)
+	}
+}
+
+func TestConcurrentDownloaderReadPartError(t *testing.T) {
+
+	downloader, err := getDownloader("http")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ok := downloader.(DownloaderSimple)
+	if !ok {
+		t.Fatal("error: expected DownloaderSimple instance")
+	}
+
+	ctx := context.Background()
+	opt := map[string]string{"contentLength": "100"}
+	uri := "s3://amazon.aws.com/bucket/key.mp4"
+	dtx := make(chan dlData)
+	sdr := &mockReceiverRanged{}
+
+	sdr.readPartError = fmt.Errorf("read part error")
+
+	downloadError := downloader.Download(ctx, uri, opt, dtx, sdr)
+
+	if downloadError.Error() != sdr.readPartError.Error() {
+		t.Fatalf("expected Download() to return '%v' error but got '%v'\n",
+			sdr.readPartError, downloadError)
+	}
+}
+
+func TestConcurrentDownloaderCancellation(t *testing.T)  {
+
+	const DownloadSize = 1000
+
+	downloader, err := getDownloader("s3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ok := downloader.(DownloaderConcurrent)
+	if !ok {
+		t.Fatal(fmt.Errorf("error: expected DownloaderConcurrent instance"))
+	}
+
+	ctx, _ := context.WithTimeout(context.Background(), 10 * time.Millisecond)
+	opt := map[string]string{"contentLength": strconv.FormatInt(DownloadSize, 10)}
+	uri := "s3://amazon.aws.com/bucket/key.mp4"
+	dtx := make(chan dlData)
+	rcv := &mockReceiverRanged{}
+
+	downloadError := downloader.Download(ctx, uri, opt, dtx, rcv)
+
+	if downloadError == nil {
+		t.Fatalf("expected Download() to return '%v' error but got '%v'\n", ctx.Err(), downloadError)
+	}
+}
+
 type mockReceiverRanged struct {
 	openError error
+	readPartError error
 	isOpen bool
 }
 
@@ -104,6 +224,10 @@ func (r *mockReceiverRanged) IsOpen() bool {
 
 func (r *mockReceiverRanged) ReadPartWithContext(ctx context.Context,
 	output io.WriteSeeker, opt map[string]string) (string, error) {
+
+	if r.readPartError != nil {
+		return "", r.readPartError
+	}
 
 	partSize, err := strconv.ParseInt(opt["partSize"], 10, 64)
 	if err != nil {

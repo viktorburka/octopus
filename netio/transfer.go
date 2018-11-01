@@ -48,6 +48,7 @@ func Transfer(ctx context.Context, srcUrl string, dstUrl string, options map[str
 	options["contentLength"] = strconv.FormatInt(info.Size, 10)
 
 	ioctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	datachan := make(chan dlData)
 	commchan := make(chan dlMessage)
@@ -90,10 +91,12 @@ func download(wg *sync.WaitGroup, dnl Downloader, ioctx context.Context, srcUrl 
 }
 
 func upload(wg *sync.WaitGroup, upl Uploader, ioctx context.Context, dstUrl string,
-	options map[string]string, datachan chan dlData, commchan chan dlMessage, s sender) {
+	options map[string]string, datachan chan dlData, commchan chan dlMessage, snd sender) {
 
 	defer wg.Done()
-	upl.Upload(ioctx, dstUrl, options, datachan, commchan, s)
+	if err := upl.Upload(ioctx, dstUrl, options, datachan, snd); err != nil {
+		commchan <- dlMessage{"uploader", err }
+	}
 }
 
 func probe(ctx context.Context, scheme string, uri string, options map[string]string) (FileInfo, error) {

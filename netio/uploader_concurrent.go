@@ -15,35 +15,30 @@ type UploaderConcurrent struct {
 }
 
 
-func (s UploaderConcurrent) Upload(ctx context.Context, uri string, options map[string]string,
-	data chan dlData, msg chan dlMessage, snd sender) {
+func (s UploaderConcurrent) Upload(ctx context.Context, uri string,
+	options map[string]string, data chan dlData, snd sender) error {
 
 	tempDir, err := ioutil.TempDir(os.TempDir(), "")
 	if err != nil {
-		msg <- dlMessage{sender: "uploader", err: err}
-		return
+		return err
 	}
 	defer os.RemoveAll(tempDir)
 
-	opErrCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	log.Println("open upload connection")
 
-	if err := snd.OpenWithContext(opErrCtx, uri, options); err != nil {
-		msg <- dlMessage{sender: "uploader", err: err}
-		return
+	if err := snd.OpenWithContext(ctx, uri, options); err != nil {
+		return err
 	}
 
 	const MaxWorkers = 5 // can't be 0 !
 
 	errchan := make(chan error)
-	workers := make(chan struct{}, MaxWorkers)
+	workers := make(chan struct{}, MaxWorkers) // channel as semaphore
 
 	isLastChunk := false
-	operationError := false
 
-	var wg sync.WaitGroup
+	var opErr error
+	var wg    sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
@@ -54,13 +49,7 @@ func (s UploaderConcurrent) Upload(ctx context.Context, uri string, options map[
 		var fpath string
 		var file  *os.File
 
-		var setErrorState = func(err error) {
-			cancel()
-			msg <- dlMessage{sender: "uploader", err: err}
-			operationError = false
-		}
-
-		for !isLastChunk && !operationError {
+		for !isLastChunk && opErr == nil {
 			select {
 			case chunk, ok := <-data:
 
@@ -69,9 +58,10 @@ func (s UploaderConcurrent) Upload(ctx context.Context, uri string, options map[
 					fileName := fmt.Sprintf("%v.part", counter)
 					fpath = filepath.Join(tempDir, fileName)
 					// create part file
+					log.Println("create buffer file:", fileName)
 					file, err = os.Create(fpath)
 					if err != nil {
-						setErrorState(err)
+						opErr = err
 						break
 					}
 				}
@@ -81,7 +71,7 @@ func (s UploaderConcurrent) Upload(ctx context.Context, uri string, options map[
 				if len(chunk.data) > 0 {
 					bw, err := file.Write(chunk.data)
 					if err != nil {
-						setErrorState(err)
+						opErr = err
 						break
 					}
 					total += int64(bw)
@@ -90,14 +80,14 @@ func (s UploaderConcurrent) Upload(ctx context.Context, uri string, options map[
 				if total >= MinAwsPartSize || isLastChunk { // ready to start upload
 					// close buffer file
 					if err := file.Close(); err != nil {
-						setErrorState(err)
+						opErr = err
 						break
 					}
 					file = nil
 
 					workers <- struct{}{}
 					wg.Add(1)
-					go uploadPart(opErrCtx, fpath, counter, errchan, &wg, workers, snd)
+					go uploadPart(ctx, fpath, counter, errchan, &wg, workers, snd)
 					total = 0
 					counter += 1
 				}
@@ -108,11 +98,12 @@ func (s UploaderConcurrent) Upload(ctx context.Context, uri string, options map[
 				}
 
 			case err := <-errchan: // multipart upload error
-				cancel()
-				msg <- dlMessage{sender: "uploader", err: err}
+				opErr = err
+				break
 
-			case <-opErrCtx.Done(): // there is cancellation
-				operationError = true
+			case <-ctx.Done(): // there is cancellation
+				opErr = ctx.Err()
+				break
 			}
 		}
 	}()
@@ -122,31 +113,30 @@ func (s UploaderConcurrent) Upload(ctx context.Context, uri string, options map[
 	// make sure all goroutines are finished
 	wg.Wait()
 
-	log.Println("finished uploading all parts. operationError =", operationError)
+	log.Println("finished uploading all parts. operationError =", opErr)
 
-	if operationError {
+	if opErr != nil {
 		log.Println("upload interrupted because of error. cancelling upload")
 		if err := snd.CancelWithContext(ctx); err != nil {
-			msg <- dlMessage{sender: "uploader", err: err}
+			return fmt.Errorf("%v: error while cancelling upload: %v", opErr, err)
 		}
-		return
+		return opErr
 	}
 
 	log.Println("close upload connection")
 
-	if err := snd.CloseWithContext(opErrCtx); err != nil {
-		msg <- dlMessage{sender: "uploader", err: err}
-		return
+	if err := snd.CloseWithContext(ctx); err != nil {
+		return err
 	}
 
 	log.Println("remove buffer files and folder")
 
 	if err := os.RemoveAll(tempDir); err != nil {
-		msg <- dlMessage{sender: "uploader", err: err}
-		return
+		return fmt.Errorf("error deleting temp folder: %v", err)
 	}
 
 	log.Println("upload done")
+	return nil
 }
 
 func uploadPart(ctx context.Context, filePath string, pn int64, errchan chan error, wg *sync.WaitGroup,

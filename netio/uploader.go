@@ -16,7 +16,7 @@ type sender interface {
 
 type Uploader interface {
 	Upload(ctx context.Context, uri string, options map[string]string,
-		data chan dlData, msg chan dlMessage, s sender)
+		data chan dlData, snd sender) error
 }
 
 const MinAwsPartSize = 5 * 1024 * 1024 // 5MB

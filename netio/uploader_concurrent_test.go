@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"sync"
 	"testing"
 )
 
@@ -20,32 +19,16 @@ func TestConnectionInitError(t *testing.T) {
 	opt := map[string]string{}
 	uri := "s3://amazon.aws.com/bucket/key.mp4"
 	dtx := make(chan dlData)
-	msg := make(chan dlMessage)
 	sdr := &mockSender{}
 
 	// set to not being able to start sending
-	openError := fmt.Errorf("open error")
-	sdr.openError = openError
+	sdr.openError = fmt.Errorf("open error")
 
-	// expected error
-	var uploadError error
+	uploadError := uploader.Upload(ctx, uri, opt, dtx, sdr)
 
-	// to properly get the error from chan and unblock Upload()
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		message := <-msg
-		uploadError = message.err
-	}()
-
-	uploader.Upload(ctx, uri, opt, dtx, msg, sdr)
-
-	wg.Wait()
-
-	if uploadError != openError {
-		t.Fatalf("expected Upload() to return '%v' error but got '%v'\n", openError, uploadError)
+	if uploadError != sdr.openError {
+		t.Fatalf("expected Upload() to return '%v' error but got '%v'\n",
+			sdr.openError, uploadError)
 	}
 }
 
@@ -60,27 +43,10 @@ func TestHappyPath(t *testing.T) {
 	opt := map[string]string{}
 	uri := "s3://amazon.aws.com/bucket/key.mp4"
 	dtx := make(chan dlData)
-	msg := make(chan dlMessage)
 	sdr := &mockSender{}
 
-	// to properly get the error from chan and unblock Upload()
-	var wg sync.WaitGroup
-
-	// expected error
-	var uploadError error
-
-	// error reader goroutine
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		message := <-msg
-		uploadError = message.err
-	}()
-
 	// data provider goroutine
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
 		buf := make([]byte, 256*1024) // 256KB file
 		for i:=0; i<len(buf); i++ {
 			buf[i] = 0xEF
@@ -89,11 +55,7 @@ func TestHappyPath(t *testing.T) {
 		close(dtx)
 	}()
 
-	uploader.Upload(ctx, uri, opt, dtx, msg, sdr)
-
-	close(msg)
-
-	wg.Wait()
+	uploadError := uploader.Upload(ctx, uri, opt, dtx, sdr)
 
 	if uploadError != nil {
 		t.Fatalf("expected Upload() to return '%v' error but got '%v'\n", nil, uploadError)

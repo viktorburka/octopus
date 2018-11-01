@@ -17,27 +17,23 @@ type UploaderSimple struct {
 }
 
 func (f UploaderSimple) Upload(ctx context.Context, uri string, options map[string]string,
-	data chan dlData, msg chan dlMessage, s sender) {
+	data chan dlData, s sender) error {
 
 	tempDir, err := ioutil.TempDir(os.TempDir(), "")
 	if err != nil {
-		msg <- dlMessage{sender: "uploader", err: err}
-		return
+		return err
 	}
 
 	uploadUrl, err := url.Parse(uri)
 	if err != nil {
-		msg <- dlMessage{sender: "uploader", err: err}
-		return
+		return err
 	}
 
 	fileName := path.Base(uploadUrl.Path)
 	tempFilePath := filepath.Join(tempDir, fileName)
 
-	err = s.OpenWithContext(context.Background(), tempFilePath, options)
-	if err != nil {
-		msg <- dlMessage{sender: "uploader", err: err}
-		return
+	if err := s.OpenWithContext(context.Background(), tempFilePath, options); err != nil {
+		return err
 	}
 	defer s.CloseWithContext(context.Background())
 
@@ -48,17 +44,16 @@ func (f UploaderSimple) Upload(ctx context.Context, uri string, options map[stri
 		case chunk, ok := <-data:
 			if !ok { // channel closed
 				log.Println("Upload finished. Total size:", totalBytes)
-				return
+				return nil
 			}
 			reader := bytes.NewReader(chunk.data)
 			_, err := s.WritePartWithContext(context.Background(), reader, map[string]string{})
 			if err != nil {
-				msg <- dlMessage{sender: "uploader", err: err}
-				return
+				return err
 			}
 			totalBytes += uint64(len(chunk.data))
 		case <-ctx.Done(): // there is cancellation
-			return
+			return ctx.Err()
 		}
 	}
 }

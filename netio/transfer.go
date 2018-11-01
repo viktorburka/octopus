@@ -87,7 +87,9 @@ func download(wg *sync.WaitGroup, dnl Downloader, ioctx context.Context, srcUrl 
 	options map[string]string, datachan chan dlData, commchan chan dlMessage, rc receiver) {
 
 	defer wg.Done()
-	dnl.Download(ioctx, srcUrl, options, datachan, commchan, rc)
+	if err := dnl.Download(ioctx, srcUrl, options, datachan, rc); err != nil {
+		commchan <- dlMessage{"downloader", err }
+	}
 }
 
 func upload(wg *sync.WaitGroup, upl Uploader, ioctx context.Context, dstUrl string,

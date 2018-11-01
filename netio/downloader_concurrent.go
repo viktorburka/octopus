@@ -18,7 +18,7 @@ type DownloaderConcurrent struct {
 
 
 func (s DownloaderConcurrent) Download(ctx context.Context, uri string,
-	options map[string]string, data chan dlData, msg chan dlMessage, rc receiver) {
+	options map[string]string, data chan dlData, rc receiver) error {
 
 	// helper min function that takes integer (Math.Min takes float)
 	var min = func(v1 int64, v2 int64) int64 {
@@ -26,22 +26,15 @@ func (s DownloaderConcurrent) Download(ctx context.Context, uri string,
 		return v2
 	}
 
-	contentLength, err := strconv.ParseInt(options["contentLength"], 10, 64)
-	if err != nil {
-		msg <- dlMessage{sender: "downloader", err: err}
-		return
-	}
-
-	log.Println("open download connection")
-
-	if err := rc.OpenWithContext(ctx, uri, options); err != nil {
-		msg <- dlMessage{sender: "downloader", err: err}
-		return
-	}
-
+	// helper function to detect last chunk
 	var last = func(val int64) int64 {
 		if val > 0 { return 1 }
 		return 0
+	}
+
+	contentLength, err := strconv.ParseInt(options["contentLength"], 10, 64)
+	if err != nil {
+		return fmt.Errorf("error reading 'contentLength' value: %v", err)
 	}
 
 	// if contentLength is less than MinAwsPartSize,
@@ -50,31 +43,32 @@ func (s DownloaderConcurrent) Download(ctx context.Context, uri string,
 
 	if contentLength < partSize {
 		err := fmt.Errorf("can't start ranged download: contentLength < partSize")
-		msg <- dlMessage{sender: "downloader", err: err}
-		return
+		return err
 	}
 
 	tempDir, err := ioutil.TempDir(os.TempDir(), "")
 	if err != nil {
-		msg <- dlMessage{sender: "downloader", err: err}
-		return
+		return err
+	}
+
+	log.Println("open download connection")
+
+	if err := rc.OpenWithContext(ctx, uri, options); err != nil {
+		return err
 	}
 
 	const MaxWorkers = 3 // can't be 0!
 
 	partschan := make(chan int)
-	workers   := make(chan struct{}, MaxWorkers)
-
-	opErrCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	var wg sync.WaitGroup
+	errorchan := make(chan error)
+	workers   := make(chan struct{}, MaxWorkers) // channel as semaphore
 
 	partsCount := contentLength/partSize+last(contentLength%partSize)
 
+	var wg sync.WaitGroup
+
 	log.Println("total download parts count:", partsCount)
 
-	// this func retrieves the object from S3 in parts
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -101,7 +95,7 @@ func (s DownloaderConcurrent) Download(ctx context.Context, uri string,
 
 				file, err := os.Create(filePath)
 				if err != nil {
-					msg <- dlMessage{sender: "downloader", err: err}
+					errorchan <- err
 					return
 				}
 				defer file.Close()
@@ -114,20 +108,19 @@ func (s DownloaderConcurrent) Download(ctx context.Context, uri string,
 
 				log.Printf("start range download %v-%v\n", opt["rangeStart"], opt["rangeEnd"])
 
-				_, err = rc.ReadPartWithContext(opErrCtx, file, opt)
+				_, err = rc.ReadPartWithContext(ctx, file, opt)
 				if err != nil {
-					msg <- dlMessage{sender: "downloader", err: err}
+					errorchan <- err
 					return
 				}
 
 				// done writing - close file
 				if err := file.Close(); err != nil {
-					msg <- dlMessage{sender: "downloader", err: err}
+					errorchan <- err
 					return
 				}
 
 				log.Printf("part %v download finished. passing to uploader\n", curPart+1)
-
 				partschan <- int(curPart)
 
 			}(start, end-1, partNumber)
@@ -135,6 +128,8 @@ func (s DownloaderConcurrent) Download(ctx context.Context, uri string,
 
 		wg2.Wait()
 	}()
+
+	var opErr error
 
 	// this function sends the received parts to uploader
 	wg.Add(1)
@@ -144,16 +139,18 @@ func (s DownloaderConcurrent) Download(ctx context.Context, uri string,
 		parts := make([]bool, partsCount)
 		ptr   := 0
 		sent  := int64(0)
-		for {
+
+		for opErr == nil {
 			select {
 			case part, ok := <-partschan:
 				if !ok {
 					return
 				}
-				if part >= len(parts) {
-					// error
-					cancel()
-					return
+				if part >= len(parts) { // prevent array index out of bound error
+					opErr = fmt.Errorf("internal downloader error: part %v is out of range [0,%v)",
+						part, len(parts))
+					//cancel()
+					break
 				}
 				parts[part] = true
 				for ; ptr < len(parts); ptr++ {
@@ -164,19 +161,23 @@ func (s DownloaderConcurrent) Download(ctx context.Context, uri string,
 					filePath := filepath.Join(tempDir, fileName)
 
 					log.Println("sending part", ptr+1, "to uploader")
-					bw, err := writePart(opErrCtx, filePath, sent, contentLength, data)
+					bw, err := writePart(ctx, filePath, sent, contentLength, data)
 					if err != nil {
-						msg <- dlMessage{sender: "downloader", err: err}
-						return
+						opErr = err
+						break
 					}
 					if err := os.Remove(filePath); err != nil {
-						msg <- dlMessage{sender: "downloader", err: err}
-						return
+						opErr = err
+						break
 					}
 					sent += int64(bw)
 				}
-			case <-opErrCtx.Done():
-				return
+			case err := <-errorchan:
+				opErr = err
+				break
+			case <-ctx.Done():
+				opErr = ctx.Err()
+				break
 			}
 		}
 	}()
@@ -184,6 +185,8 @@ func (s DownloaderConcurrent) Download(ctx context.Context, uri string,
 	wg.Wait()
 
 	close(data)
+
+	return opErr
 }
 
 func writePart(ctx context.Context, filePath string, totalSent int64, totalSize int64, data chan dlData) (int, error) {

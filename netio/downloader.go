@@ -32,7 +32,7 @@ type FileInfo struct {
 }
 
 type Downloader interface {
-    Download(ctx context.Context, uri string, options map[string]string, data chan dlData, msg chan dlMessage, rc receiver)
+    Download(ctx context.Context, uri string, options map[string]string, data chan dlData, rc receiver) error
 }
 
 func getProbeForScheme(scheme string) (r receiver, err error) {

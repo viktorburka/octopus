@@ -10,30 +10,27 @@ type DownloaderSimple struct {
 }
 
 func (h DownloaderSimple) Download(ctx context.Context, uri string, options map[string]string,
-	data chan dlData, msg chan dlMessage, rc receiver) {
+	data chan dlData, rc receiver) error {
 
 	if err := rc.OpenWithContext(ctx, uri, options); err != nil {
-		msg<-dlMessage{sender:"downloader", err: err}
-		return
+		return err
 	}
 
 	contentLength, err := strconv.ParseInt(options["contentLength"],10,64)
 	if err != nil {
-		msg<-dlMessage{sender:"downloader", err: err}
-		return
+		return err
 	}
 
 	writer := newChanWriter(contentLength, data)
 
 	_, err = rc.ReadPartWithContext(ctx, writer, options)
 	if err != nil {
-		msg<-dlMessage{sender:"downloader", err: err}
-		return
+		return err
 	}
 
 	close(data)
 
-	msg<-dlMessage{sender:"downloader", err: nil}
+	return nil
 }
 
 

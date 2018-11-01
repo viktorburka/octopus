@@ -122,7 +122,7 @@ func (r *S3ReceiverRanged) ReadPartWithContext(ctx context.Context, output io.Wr
 
 	partSize, err := strconv.ParseInt(opt["partSize"], 10, 64)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error reading 'partSize' value: %v", err)
 	}
 
 	rangeStart := opt["rangeStart"]

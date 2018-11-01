@@ -56,7 +56,7 @@ func (r *HttpReceiver) ReadPartWithContext(ctx context.Context, output io.WriteS
 
 	// read data
 	reader := bufio.NewReader(resp.Body)
-	buffer := make([]byte, 3*1024*1024) // 3MB
+	buffer := make([]byte, 256*1024)
 	for {
 		log.Println("downloader: reading data...")
 		br, err := reader.Read(buffer)
@@ -69,6 +69,9 @@ func (r *HttpReceiver) ReadPartWithContext(ctx context.Context, output io.WriteS
 		if err == io.EOF { // done reading
 			//close(data)
 			break
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
 	}
 

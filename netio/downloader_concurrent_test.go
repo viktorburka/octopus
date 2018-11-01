@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestDownloadConnectionInitError(t *testing.T) {
+func TestConcurrentDownloadConnectionInitError(t *testing.T) {
 
 	downloader, err := getDownloader("s3")
 	if err != nil {
@@ -19,7 +19,7 @@ func TestDownloadConnectionInitError(t *testing.T) {
 	opt := map[string]string{"contentLength": "1"}
 	uri := "s3://amazon.aws.com/bucket/key.mp4"
 	dtx := make(chan dlData)
-	sdr := &mockReceiver{}
+	sdr := &mockReceiverRanged{}
 
 	// set to not being able to start sending
 	sdr.openError = fmt.Errorf("open error")
@@ -32,7 +32,7 @@ func TestDownloadConnectionInitError(t *testing.T) {
 	}
 }
 
-func TestDownloaderHappyPath(t *testing.T)  {
+func TestConcurrentDownloaderHappyPath(t *testing.T)  {
 
 	const DownloadSize = 1000
 
@@ -45,7 +45,7 @@ func TestDownloaderHappyPath(t *testing.T)  {
 	opt := map[string]string{"contentLength": strconv.FormatInt(DownloadSize, 10)}
 	uri := "s3://amazon.aws.com/bucket/key.mp4"
 	dtx := make(chan dlData)
-	rcv := &mockReceiver{}
+	rcv := &mockReceiverRanged{}
 
 	// data provider goroutine
 	var bytesReceived int64
@@ -83,31 +83,31 @@ func TestDownloaderHappyPath(t *testing.T)  {
 	}
 }
 
-type mockReceiver struct {
+type mockReceiverRanged struct {
 	openError error
 	isOpen bool
 }
 
-func (r *mockReceiver) GetFileInfo(ctx context.Context, uri string,
+func (r *mockReceiverRanged) GetFileInfo(ctx context.Context, uri string,
 	options map[string]string) (info FileInfo, err error) {
 
 	return FileInfo{}, nil
 }
 
-func (r *mockReceiver) OpenWithContext(ctx context.Context, uri string, opt map[string]string) error {
+func (r *mockReceiverRanged) OpenWithContext(ctx context.Context, uri string, opt map[string]string) error {
 	return r.openError
 }
 
-func (r *mockReceiver) IsOpen() bool {
+func (r *mockReceiverRanged) IsOpen() bool {
 	return r.isOpen
 }
 
-func (r *mockReceiver) ReadPartWithContext(ctx context.Context,
+func (r *mockReceiverRanged) ReadPartWithContext(ctx context.Context,
 	output io.WriteSeeker, opt map[string]string) (string, error) {
 
 	partSize, err := strconv.ParseInt(opt["partSize"], 10, 64)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("can't parse 'partSize': %v", err)
 	}
 
 	buf := make([]byte, partSize)
@@ -123,10 +123,10 @@ func (r *mockReceiver) ReadPartWithContext(ctx context.Context,
 	return "", nil
 }
 
-func (r *mockReceiver) CancelWithContext(ctx context.Context) error {
+func (r *mockReceiverRanged) CancelWithContext(ctx context.Context) error {
 	return nil
 }
 
-func (r *mockReceiver) CloseWithContext(ctx context.Context) error {
+func (r *mockReceiverRanged) CloseWithContext(ctx context.Context) error {
 	return nil
 }

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestConnectionInitError(t *testing.T) {
+func TestConcurrentUploaderConnectionInitError(t *testing.T) {
 
 	uploader, err := getUploader("s3")
 	if err != nil {
@@ -32,7 +32,7 @@ func TestConnectionInitError(t *testing.T) {
 	}
 }
 
-func TestHappyPath(t *testing.T) {
+func TestConcurrentUploaderHappyPath(t *testing.T) {
 
 	uploader, err := getUploader("s3")
 	if err != nil {

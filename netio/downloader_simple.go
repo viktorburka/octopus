@@ -18,7 +18,7 @@ func (h DownloaderSimple) Download(ctx context.Context, uri string, options map[
 
 	contentLength, err := strconv.ParseInt(options["contentLength"],10,64)
 	if err != nil {
-		return err
+		return fmt.Errorf("error reading 'contentLength' value: %v", err)
 	}
 
 	writer := newChanWriter(contentLength, data)

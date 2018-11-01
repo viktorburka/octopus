@@ -60,7 +60,7 @@ func TestDownloadSendsError(t *testing.T) {
 	uri := "s3://amazon.aws.com/bucket/key.mp4"
 	dtx := make(chan dlData)
 	msg := make(chan dlMessage)
-	rcv := &mockReceiver{}
+	rcv := &mockReceiverRanged{}
 
 	// set to not being able to start sending
 	openError := fmt.Errorf("open error")

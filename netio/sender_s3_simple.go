@@ -59,6 +59,7 @@ func (s *S3SenderSimple) OpenWithContext(ctx context.Context, uri string, opt ma
 	c := s3.New(sess)
 	s.m.Lock()
 	s.s3client = c
+	s.isOpen = true
 	s.m.Unlock()
 
 	return nil

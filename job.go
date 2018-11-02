@@ -1,16 +1,15 @@
 package main
 
 import (
-    "context"
-    "fmt"
-    "github.com/mongodb/mongo-go-driver/bson"
-    "github.com/mongodb/mongo-go-driver/bson/objectid"
-    "github.com/mongodb/mongo-go-driver/mongo"
-    "github.com/mongodb/mongo-go-driver/mongo/findopt"
-    "github.com/mongodb/mongo-go-driver/mongo/mongoopt"
+	"context"
+	"fmt"
+	"github.com/mongodb/mongo-go-driver/bson"
+	"github.com/mongodb/mongo-go-driver/bson/objectid"
+	"github.com/mongodb/mongo-go-driver/mongo"
+	"github.com/mongodb/mongo-go-driver/options"
 	"github.com/viktorburka/octopus/netio"
 	"log"
-    "time"
+	"time"
 )
 
 const (
@@ -73,11 +72,14 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
 
     doc := bson.NewDocument()
 
-    log.Println("Querying...")
+    docOpt := &options.FindOneAndUpdateOptions{}
+	docOpt.SetReturnDocument(options.After)
+
+	log.Println("Querying...")
     result := collection.FindOneAndUpdate(timeout,
-        map[string]string{"status": created},
-        map[string]map[string]string{"$set": {"status": running}},
-        findopt.BundleUpdateOne().ReturnDocument(mongoopt.After))
+		map[string]string{"status": created},
+		map[string]map[string]string{"$set": {"status": running}},
+		docOpt)
     if err := result.Decode(doc); err != nil {
         // do not consider ErrNoDocuments as error
         if err != mongo.ErrNoDocuments {
@@ -117,7 +119,7 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
     result = collection.FindOneAndUpdate(timeout,
         map[string]objectid.ObjectID{"_id": newJob.id},
         map[string]map[string]string{"$set": update},
-        findopt.BundleUpdateOne().ReturnDocument(mongoopt.After))
+		docOpt)
 
     if err := result.Decode(doc); err != nil {
         transErr = fmt.Errorf("error updating job status: %v", err)

@@ -3,7 +3,8 @@ package main
 import (
 	"context"
 	"github.com/kelseyhightower/envconfig"
-	"github.com/mongodb/mongo-go-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
 	"os"
 	"os/signal"
@@ -25,7 +26,7 @@ func main() {
 
 	err := envconfig.Process("octopus", &s)
 	if err != nil {
-		log.Fatal(err.Error())
+		log.Fatal(err)
 	}
 
 	sigtermCtx, cancel := context.WithCancel(context.Background())
@@ -39,7 +40,7 @@ func main() {
 	ctx, releaseContext := context.WithTimeout(context.Background(), s.DbOpTimeout)
 	defer releaseContext()
 
-	client, err := mongo.NewClient(s.DbConnection)
+	client, err := mongo.NewClient(options.Client().ApplyURI(s.DbConnection))
 	if err != nil {
 		log.Fatal(err)
 	}

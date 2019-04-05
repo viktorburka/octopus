@@ -61,6 +61,6 @@ func getReceiver(scheme string, size int64) (receiver, error) {
 	case "s3":
 		return &S3ReceiverRanged{}, nil
 	default:
-		return nil, fmt.Errorf("receiver scheme %v is not supported", scheme)
+		return nil, fmt.Errorf("receiver scheme \"%v\" is not supported", scheme)
 	}
 }

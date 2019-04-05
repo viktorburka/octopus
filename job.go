@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/mongodb/mongo-go-driver/bson"
-	"github.com/mongodb/mongo-go-driver/bson/objectid"
-	"github.com/mongodb/mongo-go-driver/mongo"
-	"github.com/mongodb/mongo-go-driver/options"
 	"github.com/viktorburka/octopus/netio"
-	"log"
+    "go.mongodb.org/mongo-driver/bson"
+    "go.mongodb.org/mongo-driver/bson/primitive"
+    "go.mongodb.org/mongo-driver/mongo"
+    "go.mongodb.org/mongo-driver/mongo/options"
+    "log"
 	"time"
 )
 
@@ -20,46 +20,15 @@ const (
 )
 
 type job struct {
-    id objectid.ObjectID
-    status string
-    srcUrl string
-    dstUrl string
-    description string
+    Id primitive.ObjectID `json:"_id"         bson:"_id"`
+    Status string         `json:"status"      bson:"status"`
+    SrcUrl string         `json:"srcUrl"      bson:"srcUrl"`
+    DstUrl string         `json:"dstUrl"      bson:"dstUrl"`
+    Description string    `json:"description" bson:"description"`
 }
 
 type jobStatus struct {
     jobError error
-}
-
-func (j *job) init(document *bson.Document) error {
-
-    var val *bson.Value
-
-    if document == nil {
-        return fmt.Errorf("can't start from nil document")
-    }
-
-    if val = document.Lookup("_id"); val == nil {
-        return fmt.Errorf("field _id missing")
-    }
-    j.id = val.ObjectID()
-
-    if val = document.Lookup("status"); val == nil {
-        return fmt.Errorf("field status missing")
-    }
-    j.status = val.StringValue()
-
-    if val = document.Lookup("srcUrl"); val == nil {
-        return fmt.Errorf("field srcUrl missing")
-    }
-    j.srcUrl = val.StringValue()
-
-    if val = document.Lookup("dstUrl"); val == nil {
-        return fmt.Errorf("field dstUrl missing")
-    }
-    j.dstUrl = val.StringValue()
-
-    return nil
 }
 
 func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration, proc chan jobStatus) {
@@ -70,34 +39,30 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
     timeout, cancel := context.WithTimeout(ctx, t)
     defer cancel()
 
-    doc := bson.NewDocument()
-
     docOpt := &options.FindOneAndUpdateOptions{}
 	docOpt.SetReturnDocument(options.After)
 
-	log.Println("Querying...")
+    var newJob job
+
+	log.Println("Querying new jobs...")
     result := collection.FindOneAndUpdate(timeout,
-		map[string]string{"status": created},
-		map[string]map[string]string{"$set": {"status": running}},
+        bson.M{"status": created},
+		map[string]bson.M{"$set": {"status": running}},
 		docOpt)
-    if err := result.Decode(doc); err != nil {
+
+    log.Println("Parsing...")
+    if err := result.Decode(&newJob); err != nil {
         // do not consider ErrNoDocuments as error
         if err != mongo.ErrNoDocuments {
             transErr = err
             log.Println("error:", err)
+        } else {
+            log.Println("No new jobs. Skipping...")
         }
         return
     }
-    log.Println("Got one document. Parsing...")
 
-    var newJob job
-
-    if err := newJob.init(doc); err != nil {
-        transErr = fmt.Errorf("received invalid json document: %v", err)
-        return
-    }
-
-    log.Println("Starting transfer from", newJob.srcUrl, "to", newJob.dstUrl, "...")
+    log.Println("Starting transfer from", newJob.SrcUrl, "to", newJob.DstUrl)
 
     update := map[string]string{"status": complete}
 
@@ -105,11 +70,10 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
     // TODO: read options from the db
     opt := map[string]string{"bucketNameStyle": "path-style"}
 
-    if err := netio.Transfer(ctx, newJob.srcUrl, newJob.dstUrl, opt); err != nil {
+    if err := netio.Transfer(ctx, newJob.SrcUrl, newJob.DstUrl, opt); err != nil {
         transErr = fmt.Errorf("can't perform transfer: %v", err)
         update["status"] = failed
         update["error"]  = transErr.Error()
-        log.Println(transErr)
     }
 
     // setup db op timeout again
@@ -117,14 +81,16 @@ func startJob(ctx context.Context, collection *mongo.Collection, t time.Duration
     defer cancel()
 
     result = collection.FindOneAndUpdate(timeout,
-        map[string]objectid.ObjectID{"_id": newJob.id},
-        map[string]map[string]string{"$set": update},
-		docOpt)
+        map[string]primitive.ObjectID{"_id": newJob.Id},
+        map[string]map[string]string{"$set": update})
 
-    if err := result.Decode(doc); err != nil {
+    if err := result.Err(); err != nil {
         transErr = fmt.Errorf("error updating job status: %v", err)
-        return
     }
 
-    log.Println("Finished transfer")
+    if transErr != nil {
+        log.Println("Transfer interrupted")
+    } else {
+        log.Println("Finished transfer")
+    }
 }

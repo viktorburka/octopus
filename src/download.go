@@ -7,9 +7,11 @@ import (
 	"sync"
 )
 
-const Megabyte  = 1024 * 1024
+const Kilobyte  = 1024
+const Megabyte  = 1024 * Kilobyte
 
 type fileInfo struct {
+	Url string
 	Size uint64
 }
 
@@ -18,7 +20,7 @@ type protectedError struct {
 	m sync.Mutex
 }
 
-func (p *protectedError) setError(err error) {
+func (p *protectedError) SetError(err error) {
 	p.m.Lock()
 	defer p.m.Unlock()
 	if p.err == nil {
@@ -26,10 +28,15 @@ func (p *protectedError) setError(err error) {
 	}
 }
 
-func (p *protectedError) getError() error {
+func (p *protectedError) GetError() error {
 	p.m.Lock()
 	defer p.m.Unlock()
 	return p.err
+}
+
+type dlConfig struct {
+	ChunkSize uint64
+	Concurrency int
 }
 
 type downloader interface {
@@ -37,70 +44,70 @@ type downloader interface {
 	DownloadChunk(ctx context.Context, url string, start uint64, size uint64) ([]byte, error)
 }
 
-// getDlFunc functional type is interface for create downloader function
-type getDlFunc func (string) (downloader, error)
+type dlFactory interface {
+	CreateDownloader(scheme string) (downloader, error)
+}
 
-// getDownloader returns a downloader based on scheme
-var getDownloader getDlFunc = func(scheme string) (downloader, error) {
-	// The reason the function is declared through a var assignment
-	// is to comply to getDlFunc type should it sometime change
+type dlCreator struct {
+}
+
+func (c *dlCreator) CreateDownloader(scheme string) (downloader, error) {
 	switch scheme {
 	default:
 		return nil, fmt.Errorf("file transfer scheme %v is not supported", scheme)
 	}
 }
 
-func streamingDownload(ctx context.Context, srcUrl string, dataChan chan transData) error {
-	return initiateDownload(ctx, srcUrl, getDownloader, dataChan)
+func streamingDownload(ctx context.Context, srcUrl string, cfg dlConfig, dataChan chan transData) error {
+	return initiateDownload(ctx, srcUrl, &dlCreator{}, cfg, dataChan)
 }
 
-func initiateDownload(ctx context.Context, srcUrl string, createDownloader getDlFunc, dataChan chan transData) error {
+func initiateDownload(ctx context.Context, srcUrl string, factory dlFactory, cfg dlConfig, dataChan chan transData) error {
 	u, err := url.Parse(srcUrl)
 	if err != nil {
 		return err
 	}
-	dl, err := createDownloader(u.Scheme)
+	dl, err := factory.CreateDownloader(u.Scheme)
 	if err != nil {
 		return err
 	}
-	info, err := dl.GetFileInfo(u.Path)
+	info, err := dl.GetFileInfo(srcUrl)
 	if err != nil {
 		return err
 	}
-	return startDownload(ctx, dl, srcUrl, info.Size, dataChan)
+	return startDownload(ctx, info, dl, cfg, dataChan)
 }
 
-func startDownload(ctx context.Context, dl downloader, srcUrl string, size uint64, dataChan chan transData) error {
-	const ChunkSize   = 1 * Megabyte
-	const Concurrency = 3 // can't be 0
+func startDownload(ctx context.Context, info fileInfo, dl downloader, cfg dlConfig, dataChan chan transData) error {
+	// operation error to be returned from the function
+	var opErr protectedError
 
 	// determine the number of chunks we can split the download to
-	totalChunksCount := getChunkCount(size, ChunkSize)
+	totalChunksCount := getChunkCount(info.Size, cfg.ChunkSize)
 
-	ctlChan := make(chan struct{}, Concurrency) // control channel controls the number of goroutines
+	semaphore := make(chan struct{}, cfg.Concurrency) // control channel controls the number of goroutines
 
-	var opErr protectedError // operation error to be returned from the function
 	var wg sync.WaitGroup
 
 	var i uint64
 	loop:
 	for i = 0; i < totalChunksCount; i++ {
 		select {
-			case ctlChan<- struct{}{}:
+			case semaphore <- struct{}{}: // this controls number of goroutines
 				wg.Add(1)
 				go func(chunkNumber uint64) {
 					defer wg.Done()
-					defer func() {<-ctlChan}() // unlock semaphore
-					startByte := uint64(chunkNumber*ChunkSize)
-					chunkSize := min(ChunkSize, size - startByte)
-					data, err := dl.DownloadChunk(ctx, srcUrl, startByte, chunkSize)
+					defer func() { <-semaphore }() // unlock semaphore
+					startByte := uint64(chunkNumber*cfg.ChunkSize)
+					chunkSize := min(cfg.ChunkSize, info.Size - startByte)
+					data, err := dl.DownloadChunk(ctx, info.Url, startByte, chunkSize)
 					if err != nil {
-						opErr.setError(err)
+						opErr.SetError(err)
 						return
 					}
 					chunk := transData{data, startByte, chunkSize}
 					if err := writeChunk(ctx, dataChan, chunk); err != nil {
-						opErr.setError(err)
+						opErr.SetError(err)
 						return
 					}
 				}(i)
@@ -112,7 +119,7 @@ func startDownload(ctx context.Context, dl downloader, srcUrl string, size uint6
 
 	wg.Wait()
 
-	return opErr.getError()
+	return opErr.GetError()
 }
 
 func writeChunk(ctx context.Context, dataChan chan transData, chunk transData) error {

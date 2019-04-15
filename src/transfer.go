@@ -1,52 +1,52 @@
 package main
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 type transData struct {
-	data []byte
-	start uint64
-	size uint64
+	Data []byte
+	Start uint64
+	Size uint64
 }
 
-func transfer(src, dst string) error {
+func transfer(src, dst string, cfg dlConfig) error {
+	// operation error to be returned from the function
+	var opErr protectedError
 	// streamingChan will conduct streaming download chunks
 	streamingChan := make(chan transData)
-	// completeChan indicates when one chunk download is complete
-	completeChan  := make(chan struct{})
-	// errorChan for errors on either of operations
-	errorChan     := make(chan error)
 
 	// this is needed to cancel another operation when of them fails
 	ctx, cancel := context.WithCancel(context.Background())
 
+	var wg sync.WaitGroup
+
 	// start concurrent streaming download
+	wg.Add(1)
 	go func() {
-		err := streamingDownload(ctx, src, streamingChan)
+		defer wg.Done()
+		defer close(streamingChan)
+		err := streamingDownload(ctx, src, cfg, streamingChan)
 		if err != nil {
-			errorChan<- err
+			opErr.SetError(err)
+			cancel()
 			return
 		}
-		completeChan<- struct{}{}
 	}()
 	// start concurrent streaming upload
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		err := streamingUpload(ctx, dst, streamingChan)
 		if err != nil {
-			errorChan<- err
+			opErr.SetError(err)
+			cancel()
 			return
 		}
-		completeChan<- struct{}{}
 	}()
-	// sync - wait for both of streaming operations to complete
-	var opCount int
-	for ; opCount != 2 ; {
-		select {
-		case err := <-errorChan:
-			cancel()
-			return err
-		case <-completeChan:
-			opCount++
-		}
-	}
-	return nil
+
+	wg.Wait()
+
+	return opErr.GetError()
 }

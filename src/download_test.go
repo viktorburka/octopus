@@ -86,8 +86,10 @@ func (md *memDownloader) GetFileInfo(url string) (fileInfo, error) {
 }
 
 func (md *memDownloader) DownloadChunk(ctx context.Context, srcUrl string, start uint64, size uint64) ([]byte, error) {
+	chunk := make([]byte, size)
 	end := start + size
-	return md.files[srcUrl].data[start:end], nil
+	copy(chunk, md.files[srcUrl].data[start:end])
+	return chunk, nil
 }
 
 type testDlCreator struct {

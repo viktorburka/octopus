@@ -62,7 +62,8 @@ func streamingDownload(ctx context.Context, srcUrl string, cfg dlConfig, dataCha
 	return initiateDownload(ctx, srcUrl, &dlCreator{}, cfg, dataChan)
 }
 
-func initiateDownload(ctx context.Context, srcUrl string, factory dlFactory, cfg dlConfig, dataChan chan transData) error {
+func initiateDownload(ctx context.Context, srcUrl string, factory dlFactory, cfg dlConfig,
+	dataChan chan transData) error {
 	u, err := url.Parse(srcUrl)
 	if err != nil {
 		return err
@@ -113,6 +114,7 @@ func startDownload(ctx context.Context, info fileInfo, dl downloader, cfg dlConf
 				}(i)
 			case <-ctx.Done():
 				// break the loop and wait for active goroutines to finish
+				opErr.SetError(ctx.Err())
 				break loop
 		}
 	}

@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -50,22 +50,35 @@ func TestDownloadVaryConfig(t *testing.T) {
 	var kb uint64
 	for kb = minDlChunkSize; kb <= maxDlChunkSize; kb *= 2 {
 		for goroutines := 1; goroutines <= maxDlGortnCount; goroutines++ {
+			// errChan to prevent goroutine deadlock since
+			// t.Fatal() won't fail the test as it supposed to
+			errChan  := make(chan error)
 			dataChan := make(chan transData)
+			// test
 			go func() {
+				defer close(dataChan)
 				config := dlConfig{kb, goroutines}
 				err := initiateDownload(ctx,"mem://test/movie", &factory, config, dataChan)
 				if err != nil {
+					errChan<- err
+				}
+			}()
+			// verify
+			receivedFile := make([]byte, fileSize)
+			loop:
+			for {
+				select {
+				case chunk, ok := <-dataChan:
+					copy(receivedFile[chunk.Start:], chunk.Data)
+					if !ok { // channel closed
+						break loop
+					}
+				case err := <-errChan:
 					t.Fatal(err)
 				}
-				close(dataChan)
-			}()
-			data, err := mergeDataChunks(dataChan, fileSize)
-			if err != nil {
-				t.Fatal(err)
 			}
-
 			h := md5.New()
-			if bytes.Compare(h.Sum(file.data), h.Sum(data)) != 0 {
+			if bytes.Compare(h.Sum(file.data), h.Sum(receivedFile)) != 0 {
 				t.Fatal("original and received data md5 sums don't match")
 			}
 		}
@@ -85,47 +98,95 @@ func TestDownloadCtxCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	dataChan := make(chan transData)
-	var wg sync.WaitGroup
-	wg.Add(1)
+	// errChan to prevent goroutine deadlock since
+	// t.Fatal() won't fail the test as it supposed to
+	errChan  := make(chan error)
+
+	//var wg sync.WaitGroup
+	//wg.Add(1)
 	go func() {
-		defer wg.Done()
+		//defer wg.Done()
+		defer close(dataChan)
 		config := dlConfig{16 * Kilobyte, 4}
 		err := initiateDownload(ctx,"mem://test/movie", &factory, config, dataChan)
 		if err != nil && err.Error() != ctx.Err().Error() { // only context cancellation error is acceptable
-			t.Fatal(err)
-		}
-		close(dataChan)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_, err := mergeDataChunks(dataChan, fileSize)
-		if err != nil {
-			t.Fatal(err)
+			errChan<- err
 		}
 	}()
 
-	// pause to let the goroutines start working so
-	// the can be interrupted in the middle
 	time.Sleep(memDl.Pause / 5)
 
 	start := time.Now()
-
 	cancel()
-	wg.Wait()
 
-	if time.Since(start) > memDl.Pause / 5 {
+	// verify
+	loop:
+	for {
+		select {
+		case _, ok := <-dataChan:
+			if !ok { // channel closed
+				break loop
+			}
+		case err := <-errChan:
+			t.Fatal(err)
+		}
+	}
+
+	if time.Since(start) > memDl.Pause/ 5 {
 		t.Fatal("context cancellation took too long")
 	}
 }
 
-func mergeDataChunks(dataChan chan transData, size uint64) ([]byte, error) {
-	data := make([]byte, size)
-	for chunk := range dataChan {
-		copy(data[chunk.Start:], chunk.Data)
+func TestDownloadChunkSizes(t *testing.T) {
+	//const fileSize = 1 * Gigabyte + 200 * Megabyte + 31 * Kilobyte + 71
+	const chunkSize = 12345
+	const fileSize  = 1 * Megabyte + 123 * Kilobyte + 21
+	const filePath  = "nop://test/movie"
+
+	nopDl := NewNoOpDownloader()
+	nopDl.Files[filePath] = nopFile{fileSize}
+	nopDl.PauseMs = 50
+	nopDl.RandomPause = true // randomize goroutines to break the order of incoming chunks
+
+	factory := testDlCreator{nopDl}
+
+	ctx, _ := context.WithCancel(context.Background())
+
+	dataChan := make(chan transData)
+	// errChan to prevent goroutine deadlock since
+	// t.Fatal() won't fail the test as it supposed to
+	errChan  := make(chan error)
+	go func() {
+		defer close(dataChan)
+		config := dlConfig{chunkSize, 4}
+		err := initiateDownload(ctx, filePath, &factory, config, dataChan)
+		if err != nil {
+			errChan<- err
+		}
+	}()
+	chunks := make([]transData, 0, fileSize / chunkSize)
+	loop:
+	for {
+		select {
+		case chunk, ok := <-dataChan:
+			if !ok { // channel closed
+				break loop
+			}
+			chunks = append(chunks, chunk)
+		case err := <-errChan:
+			t.Fatal(err)
+		}
 	}
-	return data, nil
+	sort.Slice(chunks, func(i, j int) bool {
+		return chunks[i].Start < chunks[j].Start
+	})
+	for i := 0; i < len(chunks)-1; i++ {
+		cur  := chunks[i]
+		next := chunks[i+1]
+		if cur.Start + cur.Size != next.Start {
+			t.Fatal("received chunks are not contiguous")
+		}
+	}
 }
 
 func generateFile(size uint64) memFile {
@@ -177,6 +238,49 @@ func (md *memDownloader) DownloadChunk(ctx context.Context, srcUrl string,
 	return chunk, nil
 }
 
+type nopFile struct {
+	Size uint64
+}
+
+type nopDownloader struct {
+	Files       map[string]nopFile
+	PauseMs     time.Duration // Pause in milliseconds
+	RandomPause bool
+}
+
+func NewNoOpDownloader() *nopDownloader {
+	nop := nopDownloader{
+		Files: make(map[string]nopFile),
+	}
+	return &nop
+}
+
+func (nop *nopDownloader) GetFileInfo(url string) (fileInfo, error) {
+	file, ok := nop.Files[url]
+	if !ok {
+		return fileInfo{}, fmt.Errorf("file not found: %v", url)
+	}
+	info := fileInfo{
+		Url: url,
+		Size: file.Size,
+	}
+	return info, nil
+}
+
+func (nop *nopDownloader) DownloadChunk(ctx context.Context, srcUrl string,
+	start uint64, size uint64) ([]byte, error) {
+	if nop.RandomPause {
+		src := rand.NewSource(time.Now().UnixNano())
+		r := rand.New(src)
+		n := r.Intn(int(nop.PauseMs))
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Duration(n)*time.Millisecond):
+		}
+	}
+	return []byte(""), nil
+}
+
 type testDlCreator struct {
 	dl downloader
 }
@@ -184,6 +288,8 @@ type testDlCreator struct {
 func (c *testDlCreator) CreateDownloader(scheme string) (downloader, error) {
 	switch scheme {
 	case "mem":
+		return c.dl, nil
+	case "nop":
 		return c.dl, nil
 	default:
 		return nil, fmt.Errorf("file transfer scheme %v is not supported", scheme)

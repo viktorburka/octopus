@@ -9,6 +9,7 @@ import (
 
 const Kilobyte  = 1024
 const Megabyte  = 1024 * Kilobyte
+const Gigabyte  = 1024 * Megabyte
 
 type fileInfo struct {
 	Url string

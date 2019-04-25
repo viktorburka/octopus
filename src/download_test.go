@@ -124,14 +124,11 @@ func TestDownloadCtxCancellation(t *testing.T) {
 	// t.Fatal() won't fail the test as it supposed to
 	errChan  := make(chan error)
 
-	//var wg sync.WaitGroup
-	//wg.Add(1)
 	go func() {
-		//defer wg.Done()
 		defer close(dataChan)
 		config := dlConfig{16 * Kilobyte, 4}
 		err := initiateDownload(ctx,"mem://test/movie", &factory, config, dataChan)
-		if err != nil && err.Error() != ctx.Err().Error() { // only context cancellation error is acceptable
+		if err != nil {
 			errChan<- err
 		}
 	}()
@@ -147,10 +144,13 @@ func TestDownloadCtxCancellation(t *testing.T) {
 		select {
 		case _, ok := <-dataChan:
 			if !ok { // channel closed
-				break loop
+				t.Fatal("expected", ctx.Err(), "error but finished with no error")
 			}
 		case err := <-errChan:
-			t.Fatal(err)
+			if err.Error() != ctx.Err().Error() {
+				t.Fatal("expected", ctx.Err(), "but got", err)
+			}
+			break loop
 		}
 	}
 

@@ -15,6 +15,28 @@ import (
 )
 
 
+func TestChunkCountCalculation(t *testing.T) {
+
+	type chunkTest struct {
+		FileSize   uint64
+		ChunkSize  uint64
+		ChunkCount uint64
+	}
+	table := []chunkTest {
+		{ 100,  25,  4},
+		{  32,  15,  3},
+		{   0, 100,  0},
+		{1111, 123, 10},
+	}
+
+	for _, testCase := range table {
+		count := getChunkCount(testCase.FileSize, testCase.ChunkSize)
+		if count != testCase.ChunkCount {
+			t.Fatal("expected", testCase.ChunkCount, "chunk count but got", count)
+		}
+	}
+}
+
 func TestDownloadVaryConfig(t *testing.T) {
 	const fileSize = 1 * Megabyte
 	file := generateFile(fileSize)

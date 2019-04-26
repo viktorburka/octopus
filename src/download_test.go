@@ -16,7 +16,6 @@ import (
 
 
 func TestChunkCountCalculation(t *testing.T) {
-
 	type chunkTest struct {
 		FileSize   uint64
 		ChunkSize  uint64
@@ -28,11 +27,51 @@ func TestChunkCountCalculation(t *testing.T) {
 		{   0, 100,  0},
 		{1111, 123, 10},
 	}
-
 	for _, testCase := range table {
 		count := getChunkCount(testCase.FileSize, testCase.ChunkSize)
 		if count != testCase.ChunkCount {
 			t.Fatal("expected", testCase.ChunkCount, "chunk count but got", count)
+		}
+	}
+}
+
+func TestChunkDownloadFailed(t *testing.T) {
+	const filePath = "mem://test/movie"
+	hostNotFound := fmt.Errorf("host not found")
+
+	nopDl := NewNoOpDownloader()
+	nopDl.Files[filePath] = nopFile{1000}
+	nopDl.DownloadError = hostNotFound
+
+	factory := testDlCreator{nopDl}
+
+	ctx, _ := context.WithCancel(context.Background())
+
+	dataChan := make(chan transData)
+	// errChan to prevent goroutine deadlock since
+	// t.Fatal() won't fail the test as it supposed to
+	errChan  := make(chan error)
+
+	go func() {
+		defer close(dataChan)
+		config := dlConfig{16 * Kilobyte, 4}
+		err := initiateDownload(ctx, filePath, &factory, config, dataChan)
+		if err != nil {
+			errChan<- err
+			return
+		}
+	}()
+
+	loop:
+	for {
+		select {
+		case <-dataChan:
+			t.Fatal("expected", ctx.Err(), "error but finished with no error")
+		case err := <-errChan:
+			if err.Error() !=hostNotFound.Error() {
+				t.Fatal("expected", hostNotFound, "but got", err)
+			}
+			break loop
 		}
 	}
 }
@@ -83,6 +122,7 @@ func TestDownloadVaryConfig(t *testing.T) {
 				err := initiateDownload(ctx,"mem://test/movie", &factory, config, dataChan)
 				if err != nil {
 					errChan<- err
+					return
 				}
 			}()
 			// verify
@@ -130,6 +170,7 @@ func TestDownloadCtxCancellation(t *testing.T) {
 		err := initiateDownload(ctx,"mem://test/movie", &factory, config, dataChan)
 		if err != nil {
 			errChan<- err
+			return
 		}
 	}()
 
@@ -184,6 +225,7 @@ func TestDownloadChunkSizes(t *testing.T) {
 		err := initiateDownload(ctx, filePath, &factory, config, dataChan)
 		if err != nil {
 			errChan<- err
+			return
 		}
 	}()
 	chunks := make([]transData, 0, fileSize / chunkSize)
@@ -265,9 +307,10 @@ type nopFile struct {
 }
 
 type nopDownloader struct {
-	Files       map[string]nopFile
-	PauseMs     time.Duration // Pause in milliseconds
-	RandomPause bool
+	Files         map[string]nopFile
+	PauseMs       time.Duration // Pause in milliseconds
+	RandomPause   bool
+	DownloadError error
 }
 
 func NewNoOpDownloader() *nopDownloader {
@@ -291,6 +334,9 @@ func (nop *nopDownloader) GetFileInfo(url string) (fileInfo, error) {
 
 func (nop *nopDownloader) DownloadChunk(ctx context.Context, srcUrl string,
 	start uint64, size uint64) ([]byte, error) {
+	if nop.DownloadError != nil {
+		return nil, nop.DownloadError
+	}
 	if nop.RandomPause {
 		src := rand.NewSource(time.Now().UnixNano())
 		r := rand.New(src)

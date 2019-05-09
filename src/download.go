@@ -55,7 +55,7 @@ type dlCreator struct {
 func (c *dlCreator) CreateDownloader(scheme string) (downloader, error) {
 	switch scheme {
 	default:
-		return nil, fmt.Errorf("file transfer scheme %v is not supported", scheme)
+		return nil, fmt.Errorf("downloader file transfer scheme %v is not supported", scheme)
 	}
 }
 
@@ -82,12 +82,15 @@ func initiateDownload(ctx context.Context, srcUrl string, factory dlFactory, cfg
 
 func startDownload(ctx context.Context, info fileInfo, dl downloader, cfg dlConfig, dataChan chan transData) error {
 	// operation error to be returned from the function
-	var opErr protectedError
+	var opErr error
 
 	// determine the number of chunks we can split the download to
 	totalChunksCount := getChunkCount(info.Size, cfg.ChunkSize)
 
 	semaphore := make(chan struct{}, cfg.Concurrency) // control channel controls the number of goroutines
+	errorChan := make(chan error)
+
+	dlCtx, cancel := context.WithCancel(ctx)
 
 	var wg sync.WaitGroup
 
@@ -102,27 +105,30 @@ func startDownload(ctx context.Context, info fileInfo, dl downloader, cfg dlConf
 					defer func() { <-semaphore }() // unlock semaphore
 					startByte := uint64(chunkNumber*cfg.ChunkSize)
 					chunkSize := min(cfg.ChunkSize, info.Size - startByte)
-					data, err := dl.DownloadChunk(ctx, info.Url, startByte, chunkSize)
+					data, err := dl.DownloadChunk(dlCtx, info.Url, startByte, chunkSize)
 					if err != nil {
-						opErr.SetError(err)
+						setError(dlCtx, errorChan, err)
 						return
 					}
 					chunk := transData{data, startByte, chunkSize}
-					if err := writeChunk(ctx, dataChan, chunk); err != nil {
-						opErr.SetError(err)
+					if err := writeChunk(dlCtx, dataChan, chunk); err != nil {
+						setError(dlCtx, errorChan, err)
 						return
 					}
 				}(i)
-			case <-ctx.Done():
-				// break the loop and wait for active goroutines to finish
-				opErr.SetError(ctx.Err())
+			case err := <-errorChan:
+				opErr = err
+				cancel() // cancel all other goroutines
+				break loop
+			case <-dlCtx.Done():
+				opErr = dlCtx.Err()
 				break loop
 		}
 	}
 
 	wg.Wait()
 
-	return opErr.GetError()
+	return opErr
 }
 
 func writeChunk(ctx context.Context, dataChan chan transData, chunk transData) error {
@@ -131,6 +137,13 @@ func writeChunk(ctx context.Context, dataChan chan transData, chunk transData) e
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func setError(ctx context.Context, errorChan chan error, err error) {
+	select {
+	case errorChan<- err:
+	case <-ctx.Done():
 	}
 }
 

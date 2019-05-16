@@ -54,7 +54,7 @@ func TestChunkDownloadFailed(t *testing.T) {
 
 	go func() {
 		defer close(dataChan)
-		config := dlConfig{16 * Kilobyte, 4}
+		config := dlConfig{16 * Kilobyte, 1}
 		err := initiateDownload(ctx, filePath, &factory, config, dataChan)
 		if err != nil {
 			errChan<- err
@@ -157,7 +157,8 @@ func TestDownloadCtxCancellation(t *testing.T) {
 
 	factory := testDlCreator{memDl}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	//ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), memDl.Pause)
 
 	dataChan := make(chan transData)
 	// errChan to prevent goroutine deadlock since
@@ -168,35 +169,17 @@ func TestDownloadCtxCancellation(t *testing.T) {
 		defer close(dataChan)
 		config := dlConfig{16 * Kilobyte, 4}
 		err := initiateDownload(ctx,"mem://test/movie", &factory, config, dataChan)
-		if err != nil {
-			errChan<- err
-			return
-		}
+		errChan<- err
 	}()
 
+	// cancel context after about 1/5 of download run time therefore making sure
+	// we cancel it somewhere in the middle rather than before anything starts
 	time.Sleep(memDl.Pause / 5)
 
-	start := time.Now()
 	cancel()
 
-	// verify
-	loop:
-	for {
-		select {
-		case _, ok := <-dataChan:
-			if !ok { // channel closed
-				t.Fatal("expected", ctx.Err(), "error but finished with no error")
-			}
-		case err := <-errChan:
-			if err.Error() != ctx.Err().Error() {
-				t.Fatal("expected", ctx.Err(), "but got", err)
-			}
-			break loop
-		}
-	}
-
-	if time.Since(start) > memDl.Pause/ 5 {
-		t.Fatal("context cancellation took too long")
+	if err := <-errChan; err.Error() != ctx.Err().Error() {
+		t.Fatal("expected \"", ctx.Err(), "\" but got \"", err, "\"")
 	}
 }
 

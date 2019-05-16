@@ -52,6 +52,16 @@ type dlFactory interface {
 type dlCreator struct {
 }
 
+//type opErr struct {
+//	Err error
+//}
+//
+//func (e *opErr) SetErr(err error) {
+//	if e.Err == nil {
+//		e.Err = err
+//	}
+//}
+
 func (c *dlCreator) CreateDownloader(scheme string) (downloader, error) {
 	switch scheme {
 	default:
@@ -83,6 +93,7 @@ func initiateDownload(ctx context.Context, srcUrl string, factory dlFactory, cfg
 func startDownload(ctx context.Context, info fileInfo, dl downloader, cfg dlConfig, dataChan chan transData) error {
 	// operation error to be returned from the function
 	var opErr error
+	//var result opErr
 
 	// determine the number of chunks we can split the download to
 	totalChunksCount := getChunkCount(info.Size, cfg.ChunkSize)
@@ -96,9 +107,13 @@ func startDownload(ctx context.Context, info fileInfo, dl downloader, cfg dlConf
 
 	var i uint64
 	loop:
-	for i = 0; i < totalChunksCount; i++ {
+	for {
 		select {
 			case semaphore <- struct{}{}: // this controls number of goroutines
+				if i == totalChunksCount {
+					<-semaphore // release semaphore before exit
+					break loop
+				}
 				wg.Add(1)
 				go func(chunkNumber uint64) {
 					defer wg.Done()
@@ -116,10 +131,11 @@ func startDownload(ctx context.Context, info fileInfo, dl downloader, cfg dlConf
 						return
 					}
 				}(i)
+				i++
 			case err := <-errorChan:
 				opErr = err
 				cancel() // cancel all other goroutines
-				break loop
+				break loop // break also makes sure we don't overwrite opErr with ctx.Err()
 			case <-dlCtx.Done():
 				opErr = dlCtx.Err()
 				break loop

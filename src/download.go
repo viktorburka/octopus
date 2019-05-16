@@ -93,7 +93,6 @@ func initiateDownload(ctx context.Context, srcUrl string, factory dlFactory, cfg
 func startDownload(ctx context.Context, info fileInfo, dl downloader, cfg dlConfig, dataChan chan transData) error {
 	// operation error to be returned from the function
 	var opErr error
-	//var result opErr
 
 	// determine the number of chunks we can split the download to
 	totalChunksCount := getChunkCount(info.Size, cfg.ChunkSize)
